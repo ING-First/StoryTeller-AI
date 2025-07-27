@@ -176,4 +176,7 @@ pyrightconfig.json
 # ignoring image-dataset
 *.jpg
 
+# ignoring json-dataset
+*.json
+
 # End of https://www.toptal.com/developers/gitignore/api/python
