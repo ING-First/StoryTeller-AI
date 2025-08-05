@@ -179,4 +179,7 @@ pyrightconfig.json
 # ignoring json-dataset
 *.json
 
+# ignoring csv-dataset
+*.csv
+
 # End of https://www.toptal.com/developers/gitignore/api/python
