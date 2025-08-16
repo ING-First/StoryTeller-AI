@@ -63,7 +63,7 @@ class Summarizer:
         type: int, 
         title: str, 
         contents: str, 
-        max_new_tokens: int = 100,
+        max_new_tokens: int = 200,
     ) -> dict:
         
         if self.model is None or self.tokenizer is None:
@@ -72,8 +72,8 @@ class Summarizer:
         # 시스템 프롬프트 추가
         system_prompt = (
             "System: 당신은 간결하고 핵심적인 요약을 작성하는 전문가입니다. "
-            "중요 정보는 반드시 포함하되 불필요한 설명은 제외하세요. "
             "출력은 반드시 2문장 이내로 작성하고, 문장은 자연스럽고 문법적으로 올바르게 구성하세요."
+            "동화의 교훈 위주로 핵심만 요약하세요."
         )
 
         # prompt 설정
@@ -104,7 +104,7 @@ class Summarizer:
                 outputs = self.model.generate(
                     input_ids=inputs["input_ids"],
                     max_new_tokens=max_new_tokens,
-                    do_sample=False,
+                    do_sample=True,
                     use_cache=True,
                     temperature=0.7,
                     top_p=0.9,
