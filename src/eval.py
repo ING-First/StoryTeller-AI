@@ -107,7 +107,7 @@ class StoryEvaluator:
             "각각 1~5점으로 점수만 매겨주세요. 이유는 생략하고 점수만 출력하세요."
         )
 
-    def make_chat_prompt(self, story_text: str) -> List[Dict[str, str]]:
+    def make_chat_prompt(self, story_text: str, prompt1: str = "", prompt2: str = "") -> List[Dict[str, str]]:
         crit = self.evaluation_criteria
         crit_lines = "\n".join([f"{i+1}. {c}" for i, c in enumerate(crit)])
         answer_fmt = "\n".join([f"{i+1}. {c}: X점" for i, c in enumerate(crit)])
@@ -117,7 +117,11 @@ class StoryEvaluator:
             {
                 "role": "user",
                 "content": (
-                    f"이 동화를 평가해줘\n\n### 동화:\n{story_text}\n\n"
+                    f"이 동화를 평가해줘\n\n"
+                    f"### 동화:\n{story_text}\n\n"
+                    f"### (동화 생성 시 사용된) 시스템 프롬프트: 당신은 따뜻하고 감성적인 어린이 동화를 만드는 AI입니다. 어린이가 이해하기 쉬운 문장으로 교훈을 주는 이야기를 구성해주세요.\n\n"
+                    f"### 사용자 프롬프트 1: {prompt1 or '별도 없음'}\n"
+                    f"### 사용자 프롬프트 2: {prompt2 or '별도 없음'}\n\n"
                     f"### 평가 기준:\n{crit_lines}\n\n"
                     f"### 답변 형식:\n{answer_fmt}"
                 ),
@@ -127,12 +131,13 @@ class StoryEvaluator:
     def evaluate_single_story_fast(
         self,
         story_text: str,
-        index: int = 0,
+        user_prompt_1: str = "",
+        user_prompt_2: str = "",
         parse_scores_only: bool = False,
         expected_items: int = 8,
     ) -> Dict[str, Any]:
         
-        chat = self.make_chat_prompt(story_text)
+        chat = self.make_chat_prompt(story_text, user_prompt_1, user_prompt_2)
 
         try:
             prompt_text = self.tokenizer.apply_chat_template(
@@ -146,7 +151,6 @@ class StoryEvaluator:
         if torch.cuda.is_available():
             torch.cuda.reset_peak_memory_stats()
 
-        t0 = time.time()
         with torch.inference_mode():
             try:
                 out = self.pipe(
@@ -159,27 +163,45 @@ class StoryEvaluator:
                 )[0]["generated_text"]
             except Exception as e:
                 out = f"평가 생성 실패: {e}"
-        t1 = time.time()
-
-        gpu_mb = 0
-        if torch.cuda.is_available():
-            gpu_mb = int(torch.cuda.max_memory_allocated() / (1024 * 1024))
 
         result: Dict[str, Any] = {
-            "index": index,
             "story": story_text,
-            "evaluation": out,
-            "evaluation_time_sec": round(t1 - t0, 4),
-            "gpu_memory_used_mb": gpu_mb,
+            "evaluation": out
         }
         if parse_scores_only:
-            result["scores"] = self.parse_scores_only(out, expected=expected_items)
+            result["scores"] = self.parse_scores_only(
+                out, expected=expected_items, prompt1=user_prompt_1, prompt2=user_prompt_2
+            )
         return result
 
     @classmethod
-    def parse_scores_only(cls, text: str, expected: int = 8) -> List[int]:
-        scores = [int(s) for s in cls._LINE_RE.findall(text)]
-        if len(scores) < expected:
-            fallback = re.findall(r'([1-5])\s*점', text)
-            scores = [int(s) for s in fallback][:expected]
+    def parse_scores_only(
+        cls,
+        text: str,
+        expected: int = 8,
+        prompt1: str = None,
+        prompt2: str = None
+    ) -> List[int]:
+
+        scores = [0] * expected
+
+        lines = text.strip().splitlines()
+        for line in lines:
+            m = re.match(r"^\s*(\d+)\.\s*[^\:：]+[:：]\s*([0-5]?)\s*점?", line)
+            if m:
+                idx = int(m.group(1)) - 1  # 1번 항목 → index 0
+                val = m.group(2)
+                if val.isdigit():
+                    scores[idx] = int(val)
+
+        if not prompt1 or prompt1.strip() in ["없음", "별도 없음"]:
+            scores[1] = 5
+        elif scores[1] == 0:
+            scores[1] = 5
+
+        if not prompt2 or prompt2.strip() in ["없음", "별도 없음"]:
+            scores[2] = 5
+        elif scores[2] == 0:
+            scores[2] = 5
+
         return scores[:expected]
