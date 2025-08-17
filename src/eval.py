@@ -24,7 +24,7 @@ class StoryEvaluator:
     def __init__(
         self,
         base_model_name: str = "skt/A.X-4.0-Light",
-        lora_model_path: str = "./lora_eval",
+        lora_model_path: str = "../models/lora_eval",
         max_new_tokens: int = 100,
         repetition_penalty: float = 1.1,
         do_sample: bool = False,
