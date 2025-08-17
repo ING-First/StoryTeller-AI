@@ -176,4 +176,31 @@ pyrightconfig.json
 # ignoring image-dataset
 *.jpg
 
+# ignoring json-dataset
+*.json
+
+# ignoring csv-dataset
+*.csv
+
+# ignoring safetensors-dataset
+*.safetensors
+
+# ignoring txt-dataset
+*.txt
+
+# ignoring pt-dataset
+*.pt
+
+# ignoring md-dataset
+*.md
+
+# ignoring csv-dataset
+*.bin
+
+# ignoring pth-dataset
+*.pth
+
+# ignoring jinja-dataset
+*.jinja
+
 # End of https://www.toptal.com/developers/gitignore/api/python
