@@ -1,4 +1,3 @@
-
 from typing import Union, Optional
 from fastapi import FastAPI, Depends, HTTPException, Query, Path
 from fastapi.security import OAuth2PasswordBearer
@@ -14,7 +13,11 @@ from dotenv import load_dotenv
 import os
 import re
 
+load_dotenv()
 app = FastAPI()
+
+REMOTE_GENERATE_URL = os.getenv("REMOTE_GENERATE_URL")
+REQUEST_TIMEOUT = float(os.getenv("REMOTE_TIMEOUT", "5"))
 
 summarizer = Summarizer()
 summarizer.load_lora_model()
@@ -37,6 +40,19 @@ def get_db():
         yield db
     finally:
         db.close()
+
+class GenerateStoryRequest(BaseModel):
+    uid: int
+    type: int
+    name: str
+    age: int
+    genre: str
+
+class GenerateStoryResponse(BaseModel):
+    uid: int
+    type: int
+    title: str
+    contents: str
         
 class GenerateRequest(BaseModel):
     uid: int
@@ -199,6 +215,25 @@ def login(req: LoginRequest, db: Session = Depends(get_db)):
     )
 
     return {"message": "로그인되었습니다.", "access_token": access_token, "token_type": "bearer"}
+
+
+@app.post("/generate", response_model=GenerateStoryResponse)
+def generate(req: GenerateStoryRequest):
+    try:
+        resp = requests.post(
+            REMOTE_GENERATE_URL,
+            json=req.dict(),
+            timeout=REQUEST_TIMEOUT,
+        )
+    except requests.RequestException as e:
+        raise HTTPException(status_code=502, detail=f"upstream_unreachable: {e}")
+
+    if resp.status_code != 200:
+        raise HTTPException(status_code=resp.status_code, detail=f"upstream_error: {resp.text}")
+
+    data = resp.json() 
+    return GenerateStoryResponse(**data)
+
 
 @app.post("/summarize", response_model=GenerateResponse)
 def create_summarization(req: GenerateRequest, db: Session = Depends(get_db)):
