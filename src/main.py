@@ -81,10 +81,6 @@ class RecordCheckResponse(BaseModel):
     create_dates: date
     clips: int
     
-class DetailRequest(BaseModel):
-    fid: str
-    uid: int
-    
 class DetailResponse(BaseModel):
     uid: int
     type: int
@@ -92,6 +88,14 @@ class DetailResponse(BaseModel):
     summary: str
     contents: str
     create_dates: date
+    
+class SearchResponse(BaseModel):
+    uid: int
+    type: list[int]
+    title: list[str]
+    summary: list[str]
+    contents: list[str]
+    create_dates: list[date]
 
 @app.post("/join", response_model=UserResponse)
 def join(req: UserRequest, db: Session = Depends(get_db)):
@@ -270,4 +274,37 @@ def book_detail(
         summary=row.summary,
         contents=row.contents,
         create_dates=row.createDate,
+    )
+    
+# Backend API: 동화책 검색
+@app.get("/users/{uid}/search", response_model=SearchResponse)
+def search_books(
+    uid: int = Query(None, description="사용자 ID"),
+    type: Optional[int] = Query(None, description="기록 타입"),
+    title: Optional[str] = Query(None, description="책 제목 (검색용)"),
+    db: Session = Depends(get_db)):
+    
+    query = db.query(FairyTale)
+    
+    # uid 필터 검색
+    if uid is not None:
+        query = query.filter(FairyTale.uid == uid)
+        
+        # uid가 있는 경우에만 type 필터 검색
+        if type is not None:
+            query = query.filter(FairyTale.type == type)
+    
+    # 제목 필터 검색
+    if title:
+        query = query.filter(FairyTale.title.contains(title))
+        
+    records = query.all()
+    
+    return SearchResponse(
+        uid=uid,
+        type=[r.type for r in records],
+        title=[r.title for r in records],
+        summary=[r.summary for r in records],
+        contents=[r.contents for r in records],
+        create_dates=[r.createDate for r in records],
     )
