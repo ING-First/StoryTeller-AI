@@ -17,7 +17,7 @@ import re
 app = FastAPI()
 
 summarizer = Summarizer()
-# summarizer.load_lora_model()
+summarizer.load_lora_model()
 
 load_dotenv(override=False)
 
@@ -93,6 +93,17 @@ class DetailResponse(BaseModel):
     contents: str
     create_dates: date
 
+class UserUpdateRequest(BaseModel):
+    id: str
+    passwd: str
+    repasswd: str
+    name: str
+    address: str
+      
+class UserUpdateResponse(BaseModel):
+    message: str
+
+# 회원가입 API
 @app.post("/join", response_model=UserResponse)
 def join(req: UserRequest, db: Session = Depends(get_db)):
     if req.id == "":
@@ -145,10 +156,12 @@ def join(req: UserRequest, db: Session = Depends(get_db)):
     return {"message": "회원가입이 완료되었습니다.", "id": user.id}
 
 
+# 비밀번호 체크
 def verify_password(plain_password, hashed_password):
     return pwd_context.verify(plain_password, hashed_password)
 
 
+# JWT 토근 발행
 def create_access_token(data: dict, expires_delta: timedelta = None):
     to_encode = data.copy()
     expire = datetime.utcnow() + (expires_delta or timedelta(minutes=15))
@@ -156,6 +169,7 @@ def create_access_token(data: dict, expires_delta: timedelta = None):
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
 
+# 로그인 API
 @app.post("/login", response_model=LoginResponse)
 def login(req: LoginRequest, db: Session = Depends(get_db)):
     if req.id == "":
@@ -246,6 +260,50 @@ def check_records(
         create_dates=ft.createDate,
         clips=log.clip,
     )
+
+
+# 회원정보 수정 API
+@app.post("/update_user", response_model=UserUpdateResponse)
+def join(req: UserUpdateRequest, db: Session = Depends(get_db)):
+    if req.passwd == "":
+        raise HTTPException(status_code=400, detail="비밀번호를 입력해주세요.")
+    
+    if not bool(pattern.fullmatch(req.passwd)):
+        raise HTTPException(status_code=400, detail="비밀번호에 대소문자, 특수문자, 숫자가 모두 입력됬는지 확인해주세요.")
+    
+    if req.repasswd == "":
+        raise HTTPException(status_code=400, detail="비밀번호 재입력을 입력해주세요.")
+    
+    if req.passwd != req.repasswd:
+        raise HTTPException(status_code=400, detail="비밀번호와 비밀번호 재입력이 일치하지 않습니다.")
+    
+    if req.name == "":
+        raise HTTPException(status_code=400, detail="이름을 입력해주세요.")
+    
+    if req.address == "":
+        raise HTTPException(status_code=400, detail="주소를 입력해주세요.")
+    
+    # 기존 유저 조회
+    user = db.query(Users).filter(Users.id == req.id, Users.useFlag == 1).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="해당 사용자가 존재하지 않습니다.")
+    
+    # 비밀번호 해싱
+    hashed_passwd = pwd_context.hash(req.passwd)
+    
+    user.passwd = hashed_passwd
+    user.name = req.name
+    user.address = req.address
+    user.updateDate = date.today()
+
+    try:
+        db.commit()
+        db.refresh(user)
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="서버 내부에 오류가 발생했습니다.")
+
+    return {"message": "회원정보 수정이 완료되었습니다."}
     
 # Backend API: 동화책 상세정보 조회
 @app.get("/users/{uid}/detail", response_model=DetailResponse)
