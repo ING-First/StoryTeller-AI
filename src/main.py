@@ -1,10 +1,10 @@
 from typing import Union, Optional
 
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from db import SessionLocal
-from db_models import FairyTale
+from db_models import FairyTale, FairyTaleLog
 from generate_summary import Summarizer
 from datetime import date
 
@@ -38,6 +38,15 @@ class Item(BaseModel):
     name: str
     price: float
     is_offer: Union[bool, None] = None
+    
+class RecordCheckResponse(BaseModel):
+    uid: int
+    type: list[int]
+    title: list[str]
+    summary: list[str]
+    contents: list[str]
+    create_dates: list[date]
+    clips: list[int]
 
 
 @app.get("/")
@@ -95,3 +104,33 @@ def create_summarization(req: GenerateRequest, db: Session = Depends(get_db)):
         "contents": ft.contents,
         "createDate": ft.createDate,
     }
+    
+# Backend API: 나의 독서기록 조회
+@app.get("/users/{uid}/check_records", response_model=RecordCheckResponse)
+def check_records(
+    uid: int, 
+    fid: int = Query(..., description="동화 ID"),
+    db: Session = Depends(get_db)
+    ):
+    
+    row = (
+        db.query(FairyTale, FairyTaleLog)
+        .join(FairyTaleLog, FairyTale.fid == FairyTaleLog.fid)
+        .filter(FairyTale.uid == uid, FairyTaleLog.uid == uid)
+        .filter(FairyTale.fid == fid, FairyTaleLog.fid == fid)
+    )
+
+    # 조회 기록이 없는 경우 Error Message 출력
+    if not row:
+        raise HTTPException(status_code=404, detail="기록을 찾을 수 없음")
+
+    ft, log = row
+    return RecordCheckResponse(
+        uid=uid,
+        type=ft.type,
+        title=ft.title,
+        summary=ft.summary,
+        contents=ft.contents,
+        create_dates=ft.createDate,
+        clips=log.clip,
+    )
