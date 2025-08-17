@@ -4,14 +4,15 @@ from fastapi import FastAPI, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from db import SessionLocal
-from db_models import FairyTale
+from db_models import Users, FairyTale
 from generate_summary import Summarizer
 from datetime import date
+from passlib.context import CryptContext
 
 app = FastAPI()
 
 summarizer = Summarizer()
-summarizer.load_lora_model()
+# summarizer.load_lora_model()
 
 def get_db():
     db = SessionLocal()
@@ -34,25 +35,63 @@ class GenerateResponse(BaseModel):
     contents: str
     createDate: date
 
-class Item(BaseModel):
+class UserRequest(BaseModel):
+    id: str
+    passwd: str
+    repasswd: str
     name: str
-    price: float
-    is_offer: Union[bool, None] = None
+    address: str
 
+@app.post("/join")
+def join(req: UserRequest, db: Session = Depends(get_db)):
+    pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-@app.get("/")
-def read_root():
-    return {"Hello": "World"}
+    if req.id == "":
+        raise HTTPException(status_code=400, detail="아이디를 입력해주세요.")
+    
+    if req.passwd == "":
+        raise HTTPException(status_code=400, detail="비밀번호를 입력해주세요.")
+    
+    if req.repasswd == "":
+        raise HTTPException(status_code=400, detail="비밀번호 재입력을 입력해주세요.")
+    
+    if req.passwd != req.repasswd:
+        raise HTTPException(status_code=400, detail="비밀번호와 비밀번호 재입력이 일치하지 않습니다.")
+    
+    if req.name == "":
+        raise HTTPException(status_code=400, detail="이름을 입력해주세요.")
+    
+    if req.address == "":
+        raise HTTPException(status_code=400, detail="주소를 입력해주세요.")
+    
+    # 아이디 중복 체크
+    existing = db.query(Users).filter(Users.id == req.id).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="이미 존재하는 아이디입니다.")
+    
+    # 비밀번호 해싱
+    hashed_passwd = pwd_context.hash(req.passwd)
+    
 
+    user = Users(
+        id=req.id,
+        passwd=hashed_passwd,
+        name=req.name,
+        address=req.address,
+        useFlag=1,
+        createDate=date.today(),
+        updateDate=date.today(),
+    )
+      
+    try:
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+    except Exception as e:
+      db.rollback()
+      raise HTTPException(status_code=500, detail=f"db_error: {e}")
 
-@app.get("/items/{item_id}")
-def read_item(item_id: int, q: Union[str, None] = None):
-    return {"item_id": item_id, "q": q}
-
-
-@app.put("/items/{item_id}")
-def update_item(item_id: int, item: Item):
-    return {"item_name": item.name, "item_id": item_id}
+    return {"status": 200, "detail": "회원가입이 완료되었습니다."}
 
 @app.post("/summarize", response_model=GenerateResponse)
 def create_summarization(req: GenerateRequest, db: Session = Depends(get_db)):
