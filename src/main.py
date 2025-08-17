@@ -3,8 +3,8 @@ from fastapi import FastAPI, Depends, HTTPException, Query, Path
 from fastapi.security import OAuth2PasswordBearer
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
-from db import SessionLocal
-from db_models import Users, FairyTale, FairyTaleLog
+from db.db_connector import SessionLocal
+from db.db_models import Users, FairyTale, FairyTaleLog
 from generate_summary import Summarizer
 from datetime import date, datetime, timedelta
 from passlib.context import CryptContext
@@ -130,6 +130,14 @@ class UserDeleteRequest(BaseModel):
 class UserDeleteResponse(BaseModel):
     message: str
 
+class UserUpdateSearchRequest(BaseModel):
+    uid: int
+
+class UserUpdateSearchResponse(BaseModel):
+    id: str
+    name: str
+    address: str
+
 # 회원가입 API
 @app.post("/join", response_model=UserResponse)
 def join(req: UserRequest, db: Session = Depends(get_db)):
@@ -180,7 +188,7 @@ def join(req: UserRequest, db: Session = Depends(get_db)):
       db.rollback()
       raise HTTPException(status_code=500, detail=f"서버 내부에 오류가 발생했습니다.")
 
-    return {"message": "회원가입이 완료되었습니다.", "id": user.id}
+    return UserResponse(message="회원가입이 완료되었습니다.", id=user.id)
 
 
 # 비밀번호 체크
@@ -214,7 +222,7 @@ def login(req: LoginRequest, db: Session = Depends(get_db)):
         expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     )
 
-    return {"message": "로그인되었습니다.", "access_token": access_token, "token_type": "bearer"}
+    return LoginResponse(message="로그인되었습니다.", access_token=access_token, token_type="bearer")
 
 
 @app.post("/generate", response_model=GenerateStoryResponse)
@@ -350,7 +358,7 @@ def join(req: UserUpdateRequest, db: Session = Depends(get_db)):
         db.rollback()
         raise HTTPException(status_code=500, detail="서버 내부에 오류가 발생했습니다.")
 
-    return {"message": "회원정보 수정이 완료되었습니다."}
+    return UserUpdateResponse(message="회원정보 수정이 완료되었습니다.")
     
 # Backend API: 동화책 상세정보 조회
 @app.get("/users/{uid}/detail", response_model=DetailResponse)
@@ -433,4 +441,17 @@ def delete_user(req: UserDeleteRequest,  db: Session = Depends(get_db)):
         db.rollback()
         raise HTTPException(status_code=500, detail="서버 내부에 오류가 발생했습니다.")
 
-    return {"message": "회원탈퇴가 완료되었습니다."}
+    return UserDeleteResponse(message="회원탈퇴가 완료되었습니다.")
+
+# 회원 정보수정 사용자 정보 조회
+@app.post("/user_update_search", response_model=UserUpdateSearchResponse)
+def login(req: UserUpdateSearchRequest, db: Session = Depends(get_db)):
+    user = db.query(Users).filter(Users.uid == req.uid, Users.useFlag == 1).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="해당 사용자가 존재하지 않습니다.")
+
+    return UserUpdateSearchResponse(
+        id=user.id,
+        name=user.name,
+        address=user.address
+    )
