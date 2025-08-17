@@ -7,6 +7,7 @@ from db import SessionLocal
 from db_models import FairyTale
 from generate_summary import Summarizer
 from datetime import date
+from generate_story.server import create_generate_router
 
 app = FastAPI()
 
@@ -19,6 +20,19 @@ def get_db():
         yield db
     finally:
         db.close()
+
+class GenerateRequest(BaseModel):
+    uid: int
+    type: int
+    title: str
+    contents: str
+
+class GenerateResponse(BaseModel):
+    uid: int
+    type: int
+    title: str
+    contents: str
+    createDate: date
         
 class GenerateRequest(BaseModel):
     uid: int
@@ -95,3 +109,5 @@ def create_summarization(req: GenerateRequest, db: Session = Depends(get_db)):
         "contents": ft.contents,
         "createDate": ft.createDate,
     }
+
+app.include_router(create_generate_router)
