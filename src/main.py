@@ -1,17 +1,35 @@
-from typing import Union, Optional
 
-from fastapi import FastAPI, Depends, HTTPException, Query
+from typing import Union, Optional
+from fastapi import FastAPI, Depends, HTTPException
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from db import SessionLocal
-from db_models import FairyTale, FairyTaleLog
+from db_models import Users, FairyTale
 from generate_summary import Summarizer
-from datetime import date
+from datetime import date, datetime, timedelta
+from passlib.context import CryptContext
+from jose import JWTError, jwt
+from dotenv import load_dotenv
+import os
+import re
 
 app = FastAPI()
 
 summarizer = Summarizer()
-summarizer.load_lora_model()
+# summarizer.load_lora_model()
+
+load_dotenv(override=False)
+
+SECRET_KEY = os.getenv("SECRET_KEY")
+ALGORITHM = os.getenv("ALGORITHM")
+ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES"))
+
+pattern = re.compile(r'^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*()_\-+=\[\]{}\\|;:\'",.<>/?`~])[A-Za-z\d!@#$%^&*()_\-+=\[\]{}\\|;:\'",.<>/?`~]{8,15}$')
+
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
 
 def get_db():
     db = SessionLocal()
@@ -34,11 +52,26 @@ class GenerateResponse(BaseModel):
     contents: str
     createDate: date
 
-class Item(BaseModel):
+class UserRequest(BaseModel):
+    id: str
+    passwd: str
+    repasswd: str
     name: str
-    price: float
-    is_offer: Union[bool, None] = None
-    
+    address: str
+      
+class UserResponse(BaseModel):
+    message: str
+    id: str
+
+class LoginRequest(BaseModel):
+    id: str
+    passwd: str
+
+class LoginResponse(BaseModel):
+    message: str
+    access_token: str
+    token_type: str
+
 class RecordCheckResponse(BaseModel):
     uid: int
     type: int
@@ -48,20 +81,87 @@ class RecordCheckResponse(BaseModel):
     create_dates: date
     clips: int
 
+@app.post("/join", response_model=UserResponse)
+def join(req: UserRequest, db: Session = Depends(get_db)):
+    if req.id == "":
+        raise HTTPException(status_code=400, detail="아이디를 입력해주세요.")
+    
+    if req.passwd == "":
+        raise HTTPException(status_code=400, detail="비밀번호를 입력해주세요.")
+    
+    if not bool(pattern.fullmatch(req.passwd)):
+        raise HTTPException(status_code=400, detail="비밀번호에 대소문자, 특수문자, 숫자가 모두 입력됬는지 확인해주세요.")
+    
+    if req.repasswd == "":
+        raise HTTPException(status_code=400, detail="비밀번호 재입력을 입력해주세요.")
+    
+    if req.passwd != req.repasswd:
+        raise HTTPException(status_code=400, detail="비밀번호와 비밀번호 재입력이 일치하지 않습니다.")
+    
+    if req.name == "":
+        raise HTTPException(status_code=400, detail="이름을 입력해주세요.")
+    
+    if req.address == "":
+        raise HTTPException(status_code=400, detail="주소를 입력해주세요.")
+    
+    # 아이디 중복 체크
+    existing = db.query(Users).filter(Users.id == req.id).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="이미 존재하는 아이디입니다.")
+    
+    # 비밀번호 해싱
+    hashed_passwd = pwd_context.hash(req.passwd)
+    
+    user = Users(
+        id=req.id,
+        passwd=hashed_passwd,
+        name=req.name,
+        address=req.address,
+        useFlag=1,
+        createDate=date.today(),
+        updateDate=date.today(),
+    )
+      
+    try:
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+    except Exception as e:
+      db.rollback()
+      raise HTTPException(status_code=500, detail=f"서버 내부에 오류가 발생했습니다.")
 
-@app.get("/")
-def read_root():
-    return {"Hello": "World"}
+    return {"message": "회원가입이 완료되었습니다.", "id": user.id}
 
 
-@app.get("/items/{item_id}")
-def read_item(item_id: int, q: Union[str, None] = None):
-    return {"item_id": item_id, "q": q}
+def verify_password(plain_password, hashed_password):
+    return pwd_context.verify(plain_password, hashed_password)
 
 
-@app.put("/items/{item_id}")
-def update_item(item_id: int, item: Item):
-    return {"item_name": item.name, "item_id": item_id}
+def create_access_token(data: dict, expires_delta: timedelta = None):
+    to_encode = data.copy()
+    expire = datetime.utcnow() + (expires_delta or timedelta(minutes=15))
+    to_encode.update({"exp": expire})
+    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+
+
+@app.post("/login", response_model=LoginResponse)
+def login(req: LoginRequest, db: Session = Depends(get_db)):
+    if req.id == "":
+        raise HTTPException(status_code=400, detail="아이디를 입력해주세요.")
+    
+    if req.passwd == "":
+        raise HTTPException(status_code=400, detail="비밀번호를 입력해주세요.")
+    
+    user = db.query(Users).filter(Users.id == req.id).first()
+    if not user or not verify_password(req.passwd, user.passwd):
+        raise HTTPException(status_code=401, detail="아이디 또는 비밀번호가 잘못되었습니다.")
+    
+    access_token = create_access_token(
+        data={"sub": user.id},
+        expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    )
+
+    return {"message": "로그인되었습니다.", "access_token": access_token, "token_type": "bearer"}
 
 @app.post("/summarize", response_model=GenerateResponse)
 def create_summarization(req: GenerateRequest, db: Session = Depends(get_db)):
