@@ -1,11 +1,11 @@
 
 from typing import Union, Optional
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI, Depends, HTTPException, Query
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from db import SessionLocal
-from db_models import Users, FairyTale
+from db_models import Users, FairyTale, FairyTaleLog
 from generate_summary import Summarizer
 from datetime import date, datetime, timedelta
 from passlib.context import CryptContext
@@ -80,6 +80,18 @@ class RecordCheckResponse(BaseModel):
     contents: str
     create_dates: date
     clips: int
+    
+class DetailRequest(BaseModel):
+    fid: str
+    uid: int
+    
+class DetailResponse(BaseModel):
+    uid: int
+    type: int
+    title: str
+    summary: str
+    contents: str
+    create_dates: date
 
 @app.post("/join", response_model=UserResponse)
 def join(req: UserRequest, db: Session = Depends(get_db)):
@@ -233,4 +245,29 @@ def check_records(
         contents=ft.contents,
         create_dates=ft.createDate,
         clips=log.clip,
+    )
+    
+# Backend API: 동화책 상세정보 조회
+@app.get("/users/{uid}/detail", response_model=DetailResponse)
+def book_detail(
+    uid: int,
+    fid: int = Query(..., description="동화 ID"),
+    db: Session = Depends(get_db)
+):
+    row = (
+        db.query(FairyTale)
+        .filter(FairyTale.uid == uid, FairyTale.fid == fid)
+        .first()
+    )
+
+    if not row:
+        raise HTTPException(status_code=404, detail="해당 동화를 찾을 수 없음")
+
+    return DetailResponse(
+        uid=row.uid,
+        type=row.type,
+        title=row.title,
+        summary=row.summary,
+        contents=row.contents,
+        create_dates=row.createDate,
     )
