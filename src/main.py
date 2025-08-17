@@ -41,12 +41,12 @@ class Item(BaseModel):
     
 class RecordCheckResponse(BaseModel):
     uid: int
-    type: list[int]
-    title: list[str]
-    summary: list[str]
-    contents: list[str]
-    create_dates: list[date]
-    clips: list[int]
+    type: int
+    title: str
+    summary: str
+    contents: str
+    create_dates: date
+    clips: int
 
 
 @app.get("/")
