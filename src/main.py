@@ -338,7 +338,7 @@ def book_detail(
 # Backend API: 동화책 검색
 @app.get("/users/{uid}/search", response_model=SearchResponse)
 def search_books(
-    uid: int = Path(None, description="사용자 ID"),
+    uid: int = Path(..., description="사용자 ID"),
     type: Optional[int] = Query(None, description="기록 타입"),
     title: Optional[str] = Query(None, description="책 제목 (검색용)"),
     db: Session = Depends(get_db)):
