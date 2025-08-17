@@ -20,7 +20,7 @@ class Summarizer:
     def load_lora_model(
         self, 
         base_model_id="skt/A.X-4.0-Light", 
-        lora_path="./lora_summary"
+        lora_path="../models/lora_summary"
     ):
         print(f"LoRA 모델 로딩 중...")
         print(f"베이스 모델: {base_model_id}")
