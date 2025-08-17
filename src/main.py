@@ -1,5 +1,5 @@
 from typing import Union, Optional
-
+import os, requests
 from fastapi import FastAPI, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -7,9 +7,14 @@ from db import SessionLocal
 from db_models import FairyTale
 from generate_summary import Summarizer
 from datetime import date
-from generate_story.server import create_generate_router
+from dotenv import load_dotenv
 
+
+load_dotenv()
 app = FastAPI()
+
+REMOTE_GENERATE_URL = os.getenv("REMOTE_GENERATE_URL")
+REQUEST_TIMEOUT = float(os.getenv("REMOTE_TIMEOUT", "5"))
 
 summarizer = Summarizer()
 summarizer.load_lora_model()
@@ -21,18 +26,18 @@ def get_db():
     finally:
         db.close()
 
-class GenerateRequest(BaseModel):
+class GenerateStoryRequest(BaseModel):
     uid: int
     type: int
-    title: str
-    contents: str
+    name: str
+    age: int
+    genre: str
 
-class GenerateResponse(BaseModel):
+class GenerateStoryResponse(BaseModel):
     uid: int
     type: int
     title: str
     contents: str
-    createDate: date
         
 class GenerateRequest(BaseModel):
     uid: int
@@ -67,6 +72,25 @@ def read_item(item_id: int, q: Union[str, None] = None):
 @app.put("/items/{item_id}")
 def update_item(item_id: int, item: Item):
     return {"item_name": item.name, "item_id": item_id}
+
+
+@app.post("/generate", response_model=GenerateStoryResponse)
+def generate(req: GenerateStoryRequest):
+    try:
+        resp = requests.post(
+            REMOTE_GENERATE_URL,
+            json=req.dict(),
+            timeout=REQUEST_TIMEOUT,
+        )
+    except requests.RequestException as e:
+        raise HTTPException(status_code=502, detail=f"upstream_unreachable: {e}")
+
+    if resp.status_code != 200:
+        raise HTTPException(status_code=resp.status_code, detail=f"upstream_error: {resp.text}")
+
+    data = resp.json() 
+    return GenerateStoryResponse(**data)
+
 
 @app.post("/summarize", response_model=GenerateResponse)
 def create_summarization(req: GenerateRequest, db: Session = Depends(get_db)):
@@ -109,5 +133,3 @@ def create_summarization(req: GenerateRequest, db: Session = Depends(get_db)):
         "contents": ft.contents,
         "createDate": ft.createDate,
     }
-
-app.include_router(create_generate_router)
