@@ -1,5 +1,5 @@
-from typing import Union, Optional
 
+from typing import Union, Optional
 from fastapi import FastAPI, Depends, HTTPException
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from pydantic import BaseModel
@@ -58,7 +58,7 @@ class UserRequest(BaseModel):
     repasswd: str
     name: str
     address: str
-
+      
 class UserResponse(BaseModel):
     message: str
     id: str
@@ -71,6 +71,15 @@ class LoginResponse(BaseModel):
     message: str
     access_token: str
     token_type: str
+
+class RecordCheckResponse(BaseModel):
+    uid: int
+    type: int
+    title: str
+    summary: str
+    contents: str
+    create_dates: date
+    clips: int
 
 @app.post("/join", response_model=UserResponse)
 def join(req: UserRequest, db: Session = Depends(get_db)):
@@ -195,3 +204,33 @@ def create_summarization(req: GenerateRequest, db: Session = Depends(get_db)):
         "contents": ft.contents,
         "createDate": ft.createDate,
     }
+    
+# Backend API: 나의 독서기록 조회
+@app.get("/users/{uid}/check_records", response_model=RecordCheckResponse)
+def check_records(
+    uid: int, 
+    fid: int = Query(..., description="동화 ID"),
+    db: Session = Depends(get_db)
+    ):
+    
+    row = (
+        db.query(FairyTale, FairyTaleLog)
+        .join(FairyTaleLog, FairyTale.fid == FairyTaleLog.fid)
+        .filter(FairyTale.uid == uid, FairyTaleLog.uid == uid)
+        .filter(FairyTale.fid == fid, FairyTaleLog.fid == fid)
+    )
+
+    # 조회 기록이 없는 경우 Error Message 출력
+    if not row:
+        raise HTTPException(status_code=404, detail="기록을 찾을 수 없음")
+
+    ft, log = row
+    return RecordCheckResponse(
+        uid=uid,
+        type=ft.type,
+        title=ft.title,
+        summary=ft.summary,
+        contents=ft.contents,
+        create_dates=ft.createDate,
+        clips=log.clip,
+    )
