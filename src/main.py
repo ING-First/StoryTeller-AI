@@ -1,6 +1,6 @@
 
 from typing import Union, Optional
-from fastapi import FastAPI, Depends, HTTPException, Query
+from fastapi import FastAPI, Depends, HTTPException, Query, Path
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -248,6 +248,7 @@ def check_records(
         .join(FairyTaleLog, FairyTale.fid == FairyTaleLog.fid)
         .filter(FairyTale.uid == uid, FairyTaleLog.uid == uid)
         .filter(FairyTale.fid == fid, FairyTaleLog.fid == fid)
+        .first()
     )
 
     # 조회 기록이 없는 경우 Error Message 출력
@@ -337,7 +338,7 @@ def book_detail(
 # Backend API: 동화책 검색
 @app.get("/users/{uid}/search", response_model=SearchResponse)
 def search_books(
-    uid: int = Query(None, description="사용자 ID"),
+    uid: int = Path(None, description="사용자 ID"),
     type: Optional[int] = Query(None, description="기록 타입"),
     title: Optional[str] = Query(None, description="책 제목 (검색용)"),
     db: Session = Depends(get_db)):
