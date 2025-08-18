@@ -2,7 +2,7 @@ from typing import Union, Optional, List
 import os, requests, re
 import httpx
 from fastapi.security import OAuth2PasswordBearer
-from fastapi import FastAPI, Depends, HTTPException, UploadFile,  Query, Path, File, Form
+from fastapi import FastAPI, Depends, HTTPException, UploadFile,  Query, Path, File, Form, Body
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import text
@@ -17,6 +17,8 @@ from dotenv import load_dotenv
 from generate_story.generate_story import StoryBookGenerator
 from generate_story.generate_sound import SoundGenerator
 from generate_story.generate_image import ImageGenerator
+from generate_story.story_reading import StoryReader
+
 
 
 load_dotenv()
@@ -25,6 +27,7 @@ app = FastAPI()
 sbg = StoryBookGenerator()
 sbg.load()
 sg = SoundGenerator()
+reader = StoryReader()
 summarizer = Summarizer()
 summarizer.load_lora_model()
 img_generator = ImageGenerator()
@@ -58,9 +61,9 @@ class VoiceRegisterResponse(BaseModel):
     voice_id: str
     voiceFile: Optional[str] = None
 
-class TTSInlineRequest(BaseModel):
-    voice_id: str
-    text: str
+# class TTSInlineRequest(BaseModel):
+#     voice_id: str
+#     text: str
 
 class TTSPageFromListRequest(BaseModel):
     voice_id: str
@@ -133,11 +136,11 @@ class DetailResponse(BaseModel):
     
 class SearchResponse(BaseModel):
     uid: int
-    type: list[int]
-    title: list[str]
-    summary: list[str]
-    contents: list[str]
-    create_dates: list[date]
+    type: List[int]
+    title: List[str]
+    summary: List[str]
+    contents: List[str]
+    create_dates: List[date]
 
 class UserUpdateRequest(BaseModel):
     id: str
@@ -163,6 +166,18 @@ class UserUpdateSearchResponse(BaseModel):
     id: str
     name: str
     address: str
+
+class ReadRequest(BaseModel): 
+    page: int
+    voice_id: Optional[str] = None
+
+class ResumeResponse(BaseModel):  
+    uid: int
+    fid: int
+    total_pages: int
+    last_page: int
+    next_page: int
+
 
 # 회원가입 API
 @app.post("/join", response_model=UserResponse)
@@ -337,9 +352,19 @@ async def register_voice(uid: int = Form(...), audio: UploadFile = File(...), db
         db.rollback()
         raise HTTPException(status_code=500, detail=f"register_internal_error: {e}")
 
+@app.get("/users/{uid}/fairy_tales/{fid}/resume", response_model=ResumeResponse)
+def resume_reading(uid: int, fid: int, db: Session = Depends(get_db)):
+    result = reader.resume_reading(db, uid, fid)
+    return ResumeResponse(**result)
+
+@app.post("/users/{uid}/fairy_tales/{fid}/read")
+def read_page(uid: int, fid: int, req: ReadRequest = Body(...), db: Session = Depends(get_db)):
+    if not XI_API_KEY:
+        raise HTTPException(status_code=500, detail="missing XI_API_KEY")
+    return reader.stream_page(db, uid, fid, page=req.page, voice_id=req.voice_id)
 
 @app.post("/tts/stream_page")
-def tts_stream_page(req: TTSPageFromListRequest):
+def tts_stream_page(req: TTSPageFromListRequest, db: Session = Depends(get_db)):
     if not XI_API_KEY:
         raise HTTPException(status_code=500, detail="missing XI_API_KEY")
     if not req.pages:
@@ -351,28 +376,8 @@ def tts_stream_page(req: TTSPageFromListRequest):
     if not text:
         raise HTTPException(status_code=400, detail="empty_page_text")
 
-    url = f"https://api.elevenlabs.io/v1/text-to-speech/{req.voice_id}/stream"
-    headers = {
-        "xi-api-key": XI_API_KEY,
-        "Accept": "audio/mpeg",
-        "Content-Type": "application/json",
-    }
-    payload = {
-        "text": text,
-        "model_id": "eleven_multilingual_v2",
-        "voice_settings": {"stability": 0.5, "similarity_boost": 0.8},
-    }
-
-    def _iter():
-        with requests.post(url, headers=headers, json=payload, stream=True, timeout=(10, 300)) as resp:
-            if resp.status_code != 200:
-                raise HTTPException(status_code=502, detail=f"tts_error: {resp.text}")
-            for chunk in resp.iter_content(chunk_size=8192):
-                if chunk:
-                    yield chunk
-
     return StreamingResponse(
-        _iter(),
+        sg.tts_generator(voice_id=req.voice_id, text=text),
         media_type="audio/mpeg",
         headers={"Content-Disposition": f'inline; filename="page{req.page}.mp3"'}
     )
