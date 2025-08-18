@@ -1,6 +1,6 @@
 from sqlalchemy.orm import Session
 from db.db_connector import SessionLocal
-from db.db_models import FairyTale, FairyTaleImage
+from db.db_models import FairyTale, FairyTaleImages
 from generate_story.generate_image import ImageGenerator
 from generate_story.generate_summary import Summarizer
 from tqdm import tqdm
@@ -35,10 +35,10 @@ class BasicStoryGenerator:
         stories = self.search_story()
         for story in stories:
             page_summaries = self.summarizer.generate_page_summaries(story.contents)
-            for s in tqdm(page_summaries):
-                image_path, file_name = self.img_generator.generate_image(s, story.title)
+            for summary in tqdm(page_summaries):
+                image_path, file_name = self.img_generator.generate_image(summary, story.title)
 
-                images = FairyTaleImage(
+                images = FairyTaleImages(
                     fid=story.fid,
                     image_path=image_path,
                     file_name=file_name,
