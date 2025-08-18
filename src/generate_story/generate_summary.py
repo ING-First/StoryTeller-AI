@@ -4,7 +4,7 @@ from peft import PeftModel
 from datetime import date
 import torch
 import re
-
+from typing import List, Union
 
 class Summarizer:
     def __init__(self):
@@ -150,22 +150,12 @@ class Summarizer:
             "success": True,
         }
 
-    # 2문장 단위로 분할
-    def split_into_chunks(self, contents: str, sentences_per_chunk: int = 2) -> list[str]:
-        sentences = re.split(r'(?<=[.!?])\s+', contents.strip())
-        chunks = []
-        for i in range(0, len(sentences), sentences_per_chunk):
-            chunk = " ".join(sentences[i:i+sentences_per_chunk])
-            if chunk:
-                chunks.append(chunk)
-        return chunks
-
     # 페이지별 요약
-    def generate_page_summaries(self, contents: str, max_new_tokens: int = 77) -> list[str]:
+    def generate_page_summaries(self, contents: List[str], max_new_tokens: int = 77) -> list[str]:
         if self.model is None or self.tokenizer is None:
             raise RuntimeError("모델이 로드되지 않았습니다. load_lora_model()을 먼저 호출하세요.")
 
-        chunks = self.split_into_chunks(contents, sentences_per_chunk=2)
+        chunks = contents
         results = []
 
         for i, chunk in enumerate(chunks):

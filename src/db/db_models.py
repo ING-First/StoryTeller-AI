@@ -21,6 +21,7 @@ class Users(Base):
     
     fairy_tales = relationship("FairyTale", back_populates="users")
     logs = relationship("FairyTaleLog", back_populates="users")
+    voices = relationship("Voices", back_populates="user")
 
 
 # FairyTale 테이블 정의
@@ -73,10 +74,9 @@ class Voices(Base):
     __tablename__ = "Voices"
     vid = Column(Integer, primary_key=True, autoincrement=True, nullable=False)
     uid = Column(Integer, ForeignKey("Users.uid"), nullable=False)
-    contents = Column(Text, nullable=False)    
-    voiceFile = Column(String(256), nullable=False) 
+    voice_id = Column(String(50), nullable=False)     
+    memo = Column(String(10), nullable=False)         
+    voiceFile = Column(String(100), nullable=False)   
     createDate = Column(Date, nullable=False, default=date.today)
-
+    
     user = relationship("Users", back_populates="voices")
-
-Users.voices = relationship("Voices", back_populates="user", lazy="joined")  
