@@ -2,6 +2,7 @@ from sqlalchemy import (
     Column, Integer, String, Text, Date, ForeignKey, SmallInteger
 )
 from sqlalchemy.orm import declarative_base, relationship
+from datetime import date
 
 Base = declarative_base()
 
@@ -52,3 +53,16 @@ class FairyTaleLog(Base):
     # 관계 설정
     users = relationship("Users", back_populates="logs")
     fairy_tale = relationship("FairyTale", back_populates="logs")
+
+
+class Voices(Base): 
+    __tablename__ = "Voices"
+    vid = Column(Integer, primary_key=True, autoincrement=True, nullable=False)
+    uid = Column(Integer, ForeignKey("Users.uid"), nullable=False)
+    contents = Column(Text, nullable=False)    
+    voiceFile = Column(String(256), nullable=False) 
+    createDate = Column(Date, nullable=False, default=date.today)
+
+    user = relationship("Users", back_populates="voices")
+
+Users.voices = relationship("Voices", back_populates="user", lazy="joined")  
