@@ -1,13 +1,13 @@
-from typing import Union, Optional
+from typing import Union, Optional, List
 import os, requests, re
+import httpx
 from fastapi.security import OAuth2PasswordBearer
 from fastapi import FastAPI, Depends, HTTPException, UploadFile,  Query, Path, File, Form
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 from db import SessionLocal
-from db.db_connector import SessionLocal
 from db.db_models import Users, FairyTale, FairyTaleLog, Voices
 from generate_summary import Summarizer
 from datetime import date, datetime, timedelta
@@ -33,6 +33,9 @@ SECRET_KEY = os.getenv("SECRET_KEY")
 ALGORITHM = os.getenv("ALGORITHM")
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES"))
 
+XI_API_KEY = os.getenv("XI_API_KEY") or os.getenv("API_KEY")
+ELEVEN_ADD_URL = "https://api.elevenlabs.io/v1/voices/add"
+
 pattern = re.compile(r'^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*()_\-+=\[\]{}\\|;:\'",.<>/?`~])[A-Za-z\d!@#$%^&*()_\-+=\[\]{}\\|;:\'",.<>/?`~]{8,15}$')
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -50,23 +53,16 @@ class VoiceRegisterResponse(BaseModel):
     vid: int
     uid: int
     voice_id: str
-    memo: str
-    voiceFile: str
-    createDate: date
+    voiceFile: Optional[str] = None
 
-class TTSRequest(BaseModel): 
-    fid: int
-    uid: int
+class TTSInlineRequest(BaseModel):
     voice_id: str
-    clip: str
+    text: str
 
-class TTSResponse(BaseModel): 
-    lid: int
-    fid: int
-    uid: int
-    clip: int
-    createDate: date
-    updateDate: date
+class TTSPageFromListRequest(BaseModel):
+    voice_id: str
+    pages: List[str]
+    page: int
 
 class GenerateStoryRequest(BaseModel):
     uid: int
@@ -79,7 +75,7 @@ class GenerateStoryResponse(BaseModel):
     uid: int
     type: int
     title: str
-    contents: str
+    contents: List[str]
         
 class GenerateRequest(BaseModel):
     uid: int
@@ -269,71 +265,73 @@ def generate(req: GenerateStoryRequest):
 
 @app.post("/voices/register", response_model=VoiceRegisterResponse) 
 async def register_voice(uid: int = Form(...), audio: UploadFile = File(...), db: Session = Depends(get_db)):
-    os.makedirs("uploads/voices", exist_ok=True)
-    save_path = os.path.join("uploads/voices", f"{uid}_{audio.filename}")
-    
-    with open(save_path, "wb") as f:
-        f.write(await audio.read())
+    if not XI_API_KEY:
+        raise HTTPException(status_code=500, detail="missing XI_API_KEY")
 
-    res = sg.register(audio_path=save_path, uid=uid)
-    voice_id = res["voice_id"]
+    try:
+        # 디스크 저장 없이 스트리밍 업로드
+        files = {"files": (audio.filename, await audio.read(), audio.content_type or "audio/mpeg")}
+        data = {"name": f"{uid} voice", "description": "동화책 TTS 커스텀 목소리"}
+        headers = {"xi-api-key": XI_API_KEY}
 
-    v = Voices(
-        uid=uid,
-        voiceId=voice_id,        
-        voiceFile=save_path,    
-        createDate=date.today(),
-        memo = "custom"
+        async with httpx.AsyncClient(timeout=60) as client:
+            r = await client.post(ELEVEN_ADD_URL, headers=headers, data=data, files=files)
+        if r.status_code != 200:
+            raise HTTPException(status_code=502, detail=f"voice_register_failed: {r.text}")
+
+        voice_id = r.json().get("voice_id")
+        if not voice_id:
+            raise HTTPException(status_code=502, detail="voice_id_missing_from_provider")
+
+        v = Voices(uid=uid, memo="", voice_id=voice_id, voiceFile=None)
+        db.add(v); db.flush(); db.refresh(v); db.commit()
+
+        return VoiceRegisterResponse(vid=v.vid, uid=uid, voice_id=voice_id, voiceFile=None)
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"register_internal_error: {e}")
+
+
+@app.post("/tts/stream_page")
+def tts_stream_page(req: TTSPageFromListRequest):
+    if not XI_API_KEY:
+        raise HTTPException(status_code=500, detail="missing XI_API_KEY")
+    if not req.pages:
+        raise HTTPException(status_code=400, detail="pages_required")
+    if req.page < 1 or req.page > len(req.pages):
+        raise HTTPException(status_code=400, detail=f"invalid_page_number: 1..{len(req.pages)}")
+
+    text = (req.pages[req.page - 1] or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="empty_page_text")
+
+    url = f"https://api.elevenlabs.io/v1/text-to-speech/{req.voice_id}/stream"
+    headers = {
+        "xi-api-key": XI_API_KEY,
+        "Accept": "audio/mpeg",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "text": text,
+        "model_id": "eleven_multilingual_v2",
+        "voice_settings": {"stability": 0.5, "similarity_boost": 0.8},
+    }
+
+    def _iter():
+        with requests.post(url, headers=headers, json=payload, stream=True, timeout=(10, 300)) as resp:
+            if resp.status_code != 200:
+                raise HTTPException(status_code=502, detail=f"tts_error: {resp.text}")
+            for chunk in resp.iter_content(chunk_size=8192):
+                if chunk:
+                    yield chunk
+
+    return StreamingResponse(
+        _iter(),
+        media_type="audio/mpeg",
+        headers={"Content-Disposition": f'inline; filename="page{req.page}.mp3"'}
     )
-    db.add(v)
-    db.flush()  
-    db.commit()
-    db.refresh(v)
-    
-    return VoiceRegisterResponse(
-        vid=v.vid, uid=uid, voice_id=voice_id, voiceFile=save_path, createDate=v.createDate
-    )
-
-@app.post("/tts", response_model=TTSResponse)  
-def tts_generate(req: TTSRequest, db: Session = Depends(get_db)):
-    result = sg.tts_generator(fid=req.fid, uid=req.uid, voice_id=req.voice_id, contents=req.contents)
-    clip_path = result["output_path"]
-
-    log = FairyTaleLog(
-        fid=req.fid,
-        uid=req.uid,
-        clip=0,
-        ttsPath=clip_path,
-        createDate=date.today(),
-        updateDate=date.today(),
-    )
-    db.add(log)
-    db.flush()
-    db.refresh(log)
-    db.commit()
-
-    return TTSResponse(
-        fid=req.fid, uid=req.uid, clip=clip_path,
-        lid=log.lid, createDate=log.createDate, updateDate=log.updateDate
-    )
-
-@app.get("/tts/{fid}/download")  
-def tts_download(fid: int, db: Session = Depends(get_db)):
-    row = db.execute(text("""
-        SELECT ttsPath FROM FairyTaleLog 
-        WHERE fid = :fid AND ttsPath IS NOT NULL 
-        ORDER BY createDate DESC, lid DESC 
-        LIMIT 1
-    """), {"fid": fid}).fetchone()
-
-    if not row or not row[0]:
-        raise HTTPException(status_code=404, detail="audio_not_found")
-
-    path = row[0]
-    if not os.path.exists(path):
-        raise HTTPException(status_code=404, detail="audio_not_found")
-
-    return FileResponse(path, media_type="audio/mpeg", filename=os.path.basename(path))
 
 
 @app.post("/summarize", response_model=GenerateResponse)

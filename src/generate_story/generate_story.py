@@ -1,5 +1,5 @@
 import os, re, time, torch
-from typing import Optional, Dict, Tuple
+from typing import Optional, Dict, Tuple, List
 from transformers import AutoTokenizer, AutoModelForCausalLM, GenerationConfig
 
 class StoryBookGenerator:
@@ -67,29 +67,15 @@ class StoryBookGenerator:
         if tail: sentences.append(tail)
         return [x.strip() for x in sentences if x.strip()]
 
-    def _paginate(self, content: str, sentences_per_page: int = 3, max_chars: int = 600):
-        sents = self._split_sentences_kor(content)
-        pages, buf = [], []
-        for i, sent in enumerate(sents, 1):
-            buf.append(sent)
-            if (i % sentences_per_page) == 0:
-                pages.append(" ".join(buf).strip()); buf = []
-        if buf: pages.append(" ".join(buf).strip())
-
-        fixed = []
-        for p in pages:
-            if len(p) <= max_chars:
-                fixed.append(p)
-            else:
-                chunk, cur = [], 0
-                for w in p.split(" "):
-                    need = len(w) + (1 if chunk else 0)
-                    if cur + need > max_chars:
-                        fixed.append(" ".join(chunk)); chunk, cur = [w], len(w)
-                    else:
-                        chunk.append(w); cur += need
-                if chunk: fixed.append(" ".join(chunk))
-        return fixed
+    def _split_into_chunks(self, contents: str) -> List[str]:
+        """무조건 2문장씩 묶어서 반환"""
+        sents = self._split_sentences_kor(contents or "")
+        chunks: List[str] = []
+        for i in range(0, len(sents), 2):
+            chunk = " ".join(sents[i:i+2]).strip()
+            if chunk:
+                chunks.append(chunk)
+        return chunks
 
 
     def load(self):
@@ -168,7 +154,8 @@ class StoryBookGenerator:
         if text.startswith(prompt):
             text = text[len(prompt):].lstrip()
 
-        title, content = self._split_title_content(text)
+        title, full_content = self._split_title_content(text)
+        content = self._split_into_chunks(full_content)
 
         return {
             "title": title,
