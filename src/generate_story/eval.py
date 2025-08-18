@@ -1,6 +1,6 @@
 from __future__ import annotations
 from typing import List, Dict, Optional, Any
-import time
+from pathlib import Path
 import re
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM, GenerationConfig, pipeline
@@ -24,14 +24,17 @@ class StoryEvaluator:
     def __init__(
         self,
         base_model_name: str = "skt/A.X-4.0-Light",
-        lora_model_path: str = "../models/lora_eval",
         max_new_tokens: int = 100,
         repetition_penalty: float = 1.1,
         do_sample: bool = False,
         device_map: Optional[str] = None,
     ):
+        
         self.base_model_name = base_model_name
-        self.lora_model_path = lora_model_path
+        
+        BASE_DIR = Path(__file__).resolve().parent
+        self.lora_model_path = BASE_DIR.parent / "models" / "lora_eval"
+        
         self.evaluation_criteria = self.CRITERIA
         self.max_new_tokens = max_new_tokens
         self.repetition_penalty = repetition_penalty
