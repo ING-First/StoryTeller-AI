@@ -161,7 +161,7 @@ class Summarizer:
         return chunks
 
     # 페이지별 요약
-    def generate_page_summaries(self, contents: str, max_new_tokens: int = 80) -> list[str]:
+    def generate_page_summaries(self, contents: str, max_new_tokens: int = 77) -> list[str]:
         if self.model is None or self.tokenizer is None:
             raise RuntimeError("모델이 로드되지 않았습니다. load_lora_model()을 먼저 호출하세요.")
 
