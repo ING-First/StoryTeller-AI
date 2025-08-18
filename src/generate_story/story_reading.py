@@ -1,16 +1,12 @@
-# story_reading.py
 from __future__ import annotations
 from typing import List, Optional, Dict, Any, Union
 from datetime import date
 import json
-
 from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
-
 from db.db_models import FairyTale, FairyTaleLog, Voices
 from generate_story.generate_sound import SoundGenerator
-
 
 def _as_pages(contents: Union[List[str], str, None]) -> List[str]:
     if contents is None:
@@ -31,11 +27,7 @@ def _as_pages(contents: Union[List[str], str, None]) -> List[str]:
 
 
 class StoryReader:
-    """
-    동화 읽기 서비스 (페이지가 이미 List[str]로 나눠져 있는 전제)
-    - 이어듣기 상태(resume): FairyTaleLog.clip = 마지막 읽은 페이지
-    - 페이지 읽기(stream): SoundGenerator를 통해 실시간 스트리밍 + clip 갱신
-    """
+
     def __init__(self):
         self.sg = SoundGenerator()
 
