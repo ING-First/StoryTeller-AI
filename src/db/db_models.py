@@ -38,6 +38,20 @@ class FairyTale(Base):
     
     users = relationship("Users", back_populates="fairy_tales")
     logs = relationship("FairyTaleLog", back_populates="fairy_tale")
+    images = relationship("FairyTaleImages", back_populates="fairy_tale")
+
+
+# FairyTaleImage 테이블 정의
+class FairyTaleImages(Base):
+    __tablename__ = "FairyTaleImages"
+
+    image_id = Column(Integer, primary_key=True, autoincrement=True, nullable=False)
+    fid = Column(Integer, ForeignKey("FairyTale.fid"), nullable=False)
+    image_path = Column(String(256), nullable=False)
+    file_name = Column(String(50), nullable=False)
+    createDate = Column(Date, nullable=False)
+    
+    fairy_tale = relationship("FairyTale", back_populates="images")
 
 
 # FairyTaleLog 테이블 정의

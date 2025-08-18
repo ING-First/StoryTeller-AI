@@ -7,15 +7,16 @@ from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.orm import Session
-from db import SessionLocal
-from db.db_models import Users, FairyTale, FairyTaleLog, Voices
-from generate_summary import Summarizer
+from db.db_connector import SessionLocal
+from db.db_models import Users, FairyTale, FairyTaleLog, Voices, FairyTaleImages
+from generate_story.generate_summary import Summarizer
 from datetime import date, datetime, timedelta
 from passlib.context import CryptContext
 from jose import jwt
 from dotenv import load_dotenv
 from generate_story.generate_story import StoryBookGenerator
 from generate_story.generate_sound import SoundGenerator
+from generate_story.generate_image import ImageGenerator
 
 
 load_dotenv()
@@ -26,6 +27,8 @@ sbg.load()
 sg = SoundGenerator()
 summarizer = Summarizer()
 summarizer.load_lora_model()
+img_generator = ImageGenerator()
+img_generator.load_diffusion_model()
 
 load_dotenv(override=False)
 
@@ -249,9 +252,50 @@ def login(req: LoginRequest, db: Session = Depends(get_db)):
 
 
 @app.post("/generate", response_model=GenerateStoryResponse)
-def generate(req: GenerateStoryRequest):
+def generate(req: GenerateStoryRequest, db: Session = Depends(get_db)):
     try:
         result = sbg.generate_story(name=req.name, age=req.age, genre=req.genre)
+
+        summary = summarizer.generate_summary(result["content"])
+
+        ft = FairyTale(
+            uid=req.uid,
+            type=2,
+            title=result["title"],
+            summary=summary,
+            contents=result["contents"],
+            createDate=date.today(),
+        )
+
+        try:
+            db.add(ft)
+            db.commit()
+            db.refresh(ft)
+        except Exception as e:
+            db.rollback()
+            raise HTTPException(status_code=500, detail=f"서버 내부에 오류가 발생했습니다.")
+        
+        story = db.query(FairyTale).filter(FairyTale.title == result['title']).first()
+
+        page_summaries = summarizer.generate_page_summaries(result["content"])
+        for summary in page_summaries:
+            image_path, file_name = img_generator.generate_image(summary, result["title"])
+
+            images = FairyTaleImages(
+                fid=story.fid,
+                image_path=image_path,
+                file_name=file_name,
+                createDate=date.today(),
+            )
+            
+            try:
+                db.add(images)
+                db.commit()
+                db.refresh(images)
+            except Exception as e:
+                db.rollback()
+                print("이미지 데이터 저장 실패")
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"story_generation_failed: {e}")
 
