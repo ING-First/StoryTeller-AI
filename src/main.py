@@ -1,17 +1,19 @@
 from typing import Union, Optional
-from fastapi import FastAPI, Depends, HTTPException, Query, Path
+import os, requests, re
 from fastapi.security import OAuth2PasswordBearer
+from fastapi import FastAPI, Depends, HTTPException, UploadFile,  Query, Path, File, Form
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
+from db import SessionLocal
 from db.db_connector import SessionLocal
-from db.db_models import Users, FairyTale, FairyTaleLog
+from db.db_models import Users, FairyTale, FairyTaleLog, Voices
 from generate_summary import Summarizer
 from datetime import date, datetime, timedelta
 from passlib.context import CryptContext
 from jose import jwt
 from dotenv import load_dotenv
-import os
-import re
+from generate_story.generate_sound import SoundGenerator
 
 load_dotenv()
 app = FastAPI()
@@ -19,6 +21,7 @@ app = FastAPI()
 REMOTE_GENERATE_URL = os.getenv("REMOTE_GENERATE_URL")
 REQUEST_TIMEOUT = float(os.getenv("REMOTE_TIMEOUT", "5"))
 
+sg = SoundGenerator()
 summarizer = Summarizer()
 summarizer.load_lora_model()
 
@@ -40,6 +43,27 @@ def get_db():
         yield db
     finally:
         db.close()
+
+class VoiceRegisterResponse(BaseModel): 
+    vid: int
+    uid: int
+    voice_id: str
+    voiceFile: str
+    createDate: date
+
+class TTSRequest(BaseModel): 
+    fid: int
+    uid: int
+    voice_id: str
+    contents: str
+
+class TTSResponse(BaseModel): 
+    fid: int
+    uid: int
+    clip: str
+    lid: int
+    createDate: date
+    updateDate: date
 
 class GenerateStoryRequest(BaseModel):
     uid: int
@@ -241,6 +265,62 @@ def generate(req: GenerateStoryRequest):
 
     data = resp.json() 
     return GenerateStoryResponse(**data)
+
+
+@app.post("/voices/register", response_model=VoiceRegisterResponse) 
+async def register_voice(uid: int = Form(...), audio: UploadFile = File(...), db: Session = Depends(get_db)):
+    os.makedirs("uploads/voices", exist_ok=True)
+    save_path = os.path.join("uploads/voices", f"{uid}_{audio.filename}")
+    with open(save_path, "wb") as f:
+        f.write(await audio.read())
+
+    res = sg.register(audio_path=save_path, uid=uid)
+    voice_id = res["voice_id"]
+
+    v = Voices(
+        uid=uid,
+        contents=voice_id,       
+        voiceFile=save_path,    
+        createDate=date.today(),
+    )
+    db.add(v)
+    db.flush()  
+    db.refresh(v)
+    db.commit()
+
+    return VoiceRegisterResponse(
+        vid=v.vid, uid=uid, voice_id=voice_id, voiceFile=save_path, createDate=v.createDate
+    )
+
+@app.post("/tts", response_model=TTSResponse)  
+def tts_generate(req: TTSRequest, db: Session = Depends(get_db)):
+    # 합성
+    result = sg.tts_generator(fid=req.fid, uid=req.uid, voice_id=req.voice_id, contents=req.contents)
+    clip_path = result["output_path"]
+
+    log = FairyTaleLog(
+        fid=req.fid,
+        uid=req.uid,
+        clip=clip_path,
+        createDate=date.today(),
+        updateDate=date.today(),
+    )
+    db.add(log)
+    db.flush()
+    db.refresh(log)
+    db.commit()
+
+    return TTSResponse(
+        fid=req.fid, uid=req.uid, clip=clip_path,
+        lid=log.lid, createDate=log.createDate, updateDate=log.updateDate
+    )
+
+@app.get("/tts/{fid}/download")  
+def tts_download(fid: int):
+    path = f"output_{fid}.mp3"
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="audio_not_found")
+    return FileResponse(path, media_type="audio/mpeg", filename=os.path.basename(path))
 
 
 @app.post("/summarize", response_model=GenerateResponse)
