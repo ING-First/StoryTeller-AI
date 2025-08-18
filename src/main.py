@@ -5,13 +5,14 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from db.db_connector import SessionLocal
 from db.db_models import Users, FairyTale, FairyTaleLog
-from generate_summary import Summarizer
+from generate_story.generate_summary import Summarizer
 from datetime import date, datetime, timedelta
 from passlib.context import CryptContext
 from jose import jwt
 from dotenv import load_dotenv
 import os
 import re
+import requests
 
 load_dotenv()
 app = FastAPI()
