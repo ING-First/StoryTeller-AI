@@ -15,7 +15,7 @@ class Summarizer:
             torch.set_float32_matmul_precision("high")
         self.dtype = torch.bfloat16 if self.device == "cuda" else torch.float32
 
-        BASE_DIR = Path(__file__).resolve().parent
+        BASE_DIR = Path(__file__).resolve().parent.parent
         self.lora_path = BASE_DIR.parent / "models" / "lora_summary"
 
         print(f"Device: {self.device}, dtype: {self.dtype}")

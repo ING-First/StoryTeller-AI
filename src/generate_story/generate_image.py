@@ -1,18 +1,18 @@
 from diffusers import StableDiffusionPipeline
+from pathlib import Path
 import torch
 import os
 
-import warnings
-warnings.filterwarnings("ignore")
-
 class ImageGenerator:
-    def __init__(self, pre_trained_model_name="Bingsu/my-korean-stable-diffusion-v1-5", lora_path="../models/lora-diffusion-weight/pytorch_lora_weights.safetensors", save_path="../fairyTale_images"):
+    def __init__(self, pre_trained_model_name="Bingsu/my-korean-stable-diffusion-v1-5"):
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.dtype = torch.float16 if self.device == "cuda" else torch.float32
         self.pre_trained_model_name = pre_trained_model_name
         self.lora_scale = 0.9
-        self.lora_path = lora_path
-        self.save_path = save_path
+
+        BASE_DIR = Path(__file__).resolve().parent.parent
+        self.lora_path = BASE_DIR.parent / "models" / "lora-diffusion-weight"
+        self.save_path = BASE_DIR.parent / "fairyTale_images"
 
         self.pipeline = None
 
@@ -53,13 +53,16 @@ class ImageGenerator:
 
             count = len(os.listdir(os.path.join(self.save_path, title))) + 1
 
-            pipeline_output.images[0].save(os.path.join(self.save_path, title, f"{title}_{str(count).zfill(6)}.png"))
+            image_path = os.path.join(self.save_path, title)
+            file_name = f"{title}_{str(count).zfill(6)}.png"
 
-            return True
+            pipeline_output.images[0].save(os.path.join(image_path, file_name))
+
+            return image_path, file_name
 
         except Exception as e:
             print(f"이미지 생성 실패: {str(e)}")
-            return False
+            return None
         
 
 if __name__ == "__main__":
