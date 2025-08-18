@@ -4,6 +4,7 @@ from fastapi.security import OAuth2PasswordBearer
 from fastapi import FastAPI, Depends, HTTPException, UploadFile,  Query, Path, File, Form
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 from db import SessionLocal
 from db.db_connector import SessionLocal
@@ -13,14 +14,15 @@ from datetime import date, datetime, timedelta
 from passlib.context import CryptContext
 from jose import jwt
 from dotenv import load_dotenv
+from generate_story.generate_story import StoryBookGenerator
 from generate_story.generate_sound import SoundGenerator
+
 
 load_dotenv()
 app = FastAPI()
 
-REMOTE_GENERATE_URL = os.getenv("REMOTE_GENERATE_URL")
-REQUEST_TIMEOUT = float(os.getenv("REMOTE_TIMEOUT", "5"))
-
+sbg = StoryBookGenerator()
+sbg.load()
 sg = SoundGenerator()
 summarizer = Summarizer()
 summarizer.load_lora_model()
@@ -48,6 +50,7 @@ class VoiceRegisterResponse(BaseModel):
     vid: int
     uid: int
     voice_id: str
+    memo: str
     voiceFile: str
     createDate: date
 
@@ -55,13 +58,13 @@ class TTSRequest(BaseModel):
     fid: int
     uid: int
     voice_id: str
-    contents: str
+    clip: str
 
 class TTSResponse(BaseModel): 
+    lid: int
     fid: int
     uid: int
-    clip: str
-    lid: int
+    clip: int
     createDate: date
     updateDate: date
 
@@ -193,7 +196,7 @@ def join(req: UserRequest, db: Session = Depends(get_db)):
     
     # 비밀번호 해싱
     hashed_passwd = pwd_context.hash(req.passwd)
-    
+
     user = Users(
         id=req.id,
         passwd=hashed_passwd,
@@ -252,25 +255,23 @@ def login(req: LoginRequest, db: Session = Depends(get_db)):
 @app.post("/generate", response_model=GenerateStoryResponse)
 def generate(req: GenerateStoryRequest):
     try:
-        resp = requests.post(
-            REMOTE_GENERATE_URL,
-            json=req.dict(),
-            timeout=REQUEST_TIMEOUT,
-        )
-    except requests.RequestException as e:
-        raise HTTPException(status_code=502, detail=f"upstream_unreachable: {e}")
+        result = sbg.generate_story(name=req.name, age=req.age, genre=req.genre)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"story_generation_failed: {e}")
 
-    if resp.status_code != 200:
-        raise HTTPException(status_code=resp.status_code, detail=f"upstream_error: {resp.text}")
-
-    data = resp.json() 
-    return GenerateStoryResponse(**data)
+    return GenerateStoryResponse(
+        uid=req.uid,
+        type=req.type,
+        title=result["title"],
+        contents=result["content"],
+    )
 
 
 @app.post("/voices/register", response_model=VoiceRegisterResponse) 
 async def register_voice(uid: int = Form(...), audio: UploadFile = File(...), db: Session = Depends(get_db)):
     os.makedirs("uploads/voices", exist_ok=True)
     save_path = os.path.join("uploads/voices", f"{uid}_{audio.filename}")
+    
     with open(save_path, "wb") as f:
         f.write(await audio.read())
 
@@ -279,29 +280,30 @@ async def register_voice(uid: int = Form(...), audio: UploadFile = File(...), db
 
     v = Voices(
         uid=uid,
-        contents=voice_id,       
+        voiceId=voice_id,        
         voiceFile=save_path,    
         createDate=date.today(),
+        memo = "custom"
     )
     db.add(v)
     db.flush()  
-    db.refresh(v)
     db.commit()
-
+    db.refresh(v)
+    
     return VoiceRegisterResponse(
         vid=v.vid, uid=uid, voice_id=voice_id, voiceFile=save_path, createDate=v.createDate
     )
 
 @app.post("/tts", response_model=TTSResponse)  
 def tts_generate(req: TTSRequest, db: Session = Depends(get_db)):
-    # 합성
     result = sg.tts_generator(fid=req.fid, uid=req.uid, voice_id=req.voice_id, contents=req.contents)
     clip_path = result["output_path"]
 
     log = FairyTaleLog(
         fid=req.fid,
         uid=req.uid,
-        clip=clip_path,
+        clip=0,
+        ttsPath=clip_path,
         createDate=date.today(),
         updateDate=date.today(),
     )
@@ -316,10 +318,21 @@ def tts_generate(req: TTSRequest, db: Session = Depends(get_db)):
     )
 
 @app.get("/tts/{fid}/download")  
-def tts_download(fid: int):
-    path = f"output_{fid}.mp3"
+def tts_download(fid: int, db: Session = Depends(get_db)):
+    row = db.execute(text("""
+        SELECT ttsPath FROM FairyTaleLog 
+        WHERE fid = :fid AND ttsPath IS NOT NULL 
+        ORDER BY createDate DESC, lid DESC 
+        LIMIT 1
+    """), {"fid": fid}).fetchone()
+
+    if not row or not row[0]:
+        raise HTTPException(status_code=404, detail="audio_not_found")
+
+    path = row[0]
     if not os.path.exists(path):
         raise HTTPException(status_code=404, detail="audio_not_found")
+
     return FileResponse(path, media_type="audio/mpeg", filename=os.path.basename(path))
 
 
@@ -498,7 +511,7 @@ def search_books(
         create_dates=[r.createDate for r in records],
     )
 
-# 회원 탈죄 API
+# 회원 탈퇴 API
 @app.post("/delete_user", response_model=UserDeleteResponse)
 def delete_user(req: UserDeleteRequest,  db: Session = Depends(get_db)):
     # 유저 조회
