@@ -405,7 +405,7 @@ async def register_voice(uid: int = Form(...), audio: UploadFile = File(...), db
         )
         db.add(v); db.flush(); db.refresh(v); db.commit()
 
-        return VoiceRegisterResponse("사용자 음성 등록에 성공하였습니다.")
+        return VoiceRegisterResponse(message="사용자 음성 등록에 성공하였습니다.")
     except HTTPException:
         raise
     except Exception as e:
