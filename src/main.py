@@ -399,10 +399,16 @@ async def register_voice(uid: int = Form(...), audio: UploadFile = File(...), db
         if not voice_id:
             raise HTTPException(status_code=502, detail="voice_id_missing_from_provider")
 
-        v = Voices(uid=uid, memo="", voice_id=voice_id, voiceFile=None)
+        v = Voices(
+            uid=uid,
+            voice_id="",
+            memo="", 
+            voiceFile="",
+            createDate=date.today()
+        )
         db.add(v); db.flush(); db.refresh(v); db.commit()
 
-        return VoiceRegisterResponse(vid=v.vid, uid=uid, voice_id=voice_id, voiceFile=None)
+        return VoiceRegisterResponse("사용자 음성 등록에 성공하였습니다.")
     except HTTPException:
         raise
     except Exception as e:
