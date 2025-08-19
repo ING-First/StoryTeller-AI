@@ -62,10 +62,7 @@ def get_db():
         db.close()
 
 class VoiceRegisterResponse(BaseModel): 
-    vid: int
-    uid: int
-    voice_id: str
-    voiceFile: Optional[str] = None
+    message: str
 
 # class TTSInlineRequest(BaseModel):
 #     voice_id: str
