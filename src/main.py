@@ -4,6 +4,7 @@ import httpx
 from fastapi.security import OAuth2PasswordBearer
 from fastapi import FastAPI, Depends, HTTPException, UploadFile,  Query, Path, File, Form
 from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -21,6 +22,14 @@ from generate_story.generate_image import ImageGenerator
 
 load_dotenv()
 app = FastAPI()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],       
+    allow_credentials=True,   
+    allow_methods=["*"],        
+    allow_headers=["*"]       
+)
+
 
 sbg = StoryBookGenerator()
 sbg.load()
