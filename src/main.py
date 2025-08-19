@@ -84,10 +84,7 @@ class GenerateStoryRequest(BaseModel):
     genre: str
 
 class GenerateStoryResponse(BaseModel):
-    uid: int
-    type: int
-    title: str
-    contents: List[str]
+    message: str
         
 class GenerateRequest(BaseModel):
     uid: int
@@ -380,12 +377,7 @@ def generate(req: GenerateStoryRequest, db: Session = Depends(get_db)):
         gc.collect()
         torch.cuda.empty_cache()
         
-    return GenerateStoryResponse(
-        uid=req.uid,
-        type=req.type,
-        title=result["title"],
-        contents=result["content"],
-    )
+    return GenerateStoryResponse(message="동화생성을 완료했습니다.")
 
 @app.post("/voices/register", response_model=VoiceRegisterResponse) 
 async def register_voice(uid: int = Form(...), audio: UploadFile = File(...), db: Session = Depends(get_db)):
