@@ -516,8 +516,8 @@ def join(req: UserUpdateRequest, db: Session = Depends(get_db)):
 # Backend API: 동화책 상세정보 조회
 @app.get("/users/{uid}/detail/{fid}", response_model=DetailResponse)
 def book_detail(
-    uid: int,
-    fid: int = Query(..., description="동화 ID"),
+    uid: int = Path(..., description="사용자 ID"),
+    fid: int = Path(..., description="동화 ID"),
     db: Session = Depends(get_db)
 ):
     row = (
