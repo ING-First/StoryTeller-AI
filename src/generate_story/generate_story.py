@@ -160,4 +160,5 @@ class StoryBookGenerator:
         return {
             "title": title,
             "content": content,
+            "prompt": prompt
         }
