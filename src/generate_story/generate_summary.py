@@ -139,7 +139,9 @@ class Summarizer:
             if stop in summary:
                 summary = summary.split(stop)[0]
                 break
-
+            
+        summary = re.sub(r"[A-Za-z0-9.,:;!?\"'()\[\]{}<>@#$%^&*+=/_\-]+", "", summary)
+        
         return {
             "uid": uid,
             "type": type,
@@ -191,6 +193,8 @@ class Summarizer:
                 if stop in summary:
                     summary = summary.split(stop)[0].strip()
                     break
+                
+            summary = re.sub(r"[A-Za-z0-9.,:;!?\"'()\[\]{}<>@#$%^&*+=/_\-]+", "", summary)
 
             results.append(summary)
 
