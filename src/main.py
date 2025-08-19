@@ -2,6 +2,7 @@ from typing import Union, Optional, List
 from fastapi.security import OAuth2PasswordBearer
 from fastapi import FastAPI, Depends, HTTPException, UploadFile,  Query, Path, File, Form, Body
 from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sqlalchemy import text, or_
 from sqlalchemy.orm import Session
@@ -26,6 +27,14 @@ import torch
 import logging
 
 app = FastAPI()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],       
+    allow_credentials=True,   
+    allow_methods=["*"],        
+    allow_headers=["*"]       
+)
+
 
 sg = SoundGenerator()
 reader = StoryReader()
