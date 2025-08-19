@@ -1,6 +1,4 @@
 from typing import Union, Optional, List
-import os, requests, re
-import httpx
 from fastapi.security import OAuth2PasswordBearer
 from fastapi import FastAPI, Depends, HTTPException, UploadFile,  Query, Path, File, Form, Body
 from fastapi.responses import FileResponse, StreamingResponse
@@ -18,20 +16,19 @@ from generate_story.generate_story import StoryBookGenerator
 from generate_story.generate_sound import SoundGenerator
 from generate_story.generate_image import ImageGenerator
 from generate_story.story_reading import StoryReader
+from generate_story.generate_eval import StoryEvaluator
+import os
+import requests
+import re
+import httpx
+import gc
+import torch
+import logging
 
-
-
-load_dotenv()
 app = FastAPI()
 
-sbg = StoryBookGenerator()
-sbg.load()
 sg = SoundGenerator()
 reader = StoryReader()
-summarizer = Summarizer()
-summarizer.load_lora_model()
-img_generator = ImageGenerator()
-img_generator.load_diffusion_model()
 
 load_dotenv(override=False)
 
@@ -265,20 +262,42 @@ def login(req: LoginRequest, db: Session = Depends(get_db)):
 
     return LoginResponse(message="로그인되었습니다.", access_token=access_token, token_type="bearer")
 
-
+# 동화 생성 API
 @app.post("/generate", response_model=GenerateStoryResponse)
 def generate(req: GenerateStoryRequest, db: Session = Depends(get_db)):
     try:
-        result = sbg.generate_story(name=req.name, age=req.age, genre=req.genre)
+        count = 1        
+        while count <= 10:
+            sbg = StoryBookGenerator()
+            sbg.load()
+            result = sbg.generate_story(name=req.name, age=req.age, genre=req.genre)
+            del sbg; gc.collect(); torch.cuda.empty_cache()
+            
+            eval = StoryEvaluator()
+            eval_scores = eval.evaluate_single_story_fast(result['content'], result['prompt'])['scores']
+            del eval; gc.collect(); torch.cuda.empty_cache()
+            
+            if all(score > 1 for score in eval_scores):
+                break
+            
+            count += 1
 
-        summary = summarizer.generate_summary(result["content"])
+        if count > 10:
+            raise HTTPException(
+            status_code=400,
+            detail="10번 시도하였으나 유효한 동화를 생성하지 못했습니다."
+        )        
+        
+        summarizer = Summarizer()
+        summarizer.load_lora_model()
+        summary = summarizer.generate_summary(uid=req.uid, type=req.type, title=result['title'], contents=result["content"], max_new_tokens=200)["summary"]
 
         ft = FairyTale(
             uid=req.uid,
             type=2,
             title=result["title"],
             summary=summary,
-            contents=result["contents"],
+            contents=' '.join(result["content"]).strip(),
             createDate=date.today(),
         )
 
@@ -288,11 +307,17 @@ def generate(req: GenerateStoryRequest, db: Session = Depends(get_db)):
             db.refresh(ft)
         except Exception as e:
             db.rollback()
-            raise HTTPException(status_code=500, detail=f"서버 내부에 오류가 발생했습니다.")
-        
+            logging.error(f"Database error: {str(e)}", exc_info=True)
+
         story = db.query(FairyTale).filter(FairyTale.title == result['title']).first()
 
         page_summaries = summarizer.generate_page_summaries(result["content"])
+        
+        del summarizer; gc.collect(); torch.cuda.empty_cache()
+        
+        img_generator = ImageGenerator()
+        img_generator.load_diffusion_model()
+        
         for summary in page_summaries:
             image_path, file_name = img_generator.generate_image(summary, result["title"])
 
@@ -308,19 +333,49 @@ def generate(req: GenerateStoryRequest, db: Session = Depends(get_db)):
                 db.commit()
                 db.refresh(images)
             except Exception as e:
-                db.rollback()
+                torch.cuda.empty_cache()
                 print("이미지 데이터 저장 실패")
+                
+        del img_generator; gc.collect(); torch.cuda.empty_cache()
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"story_generation_failed: {e}")
+        raise HTTPException(status_code=500, detail=f"동화 생성에 실패하였습니다.: {e}")
+    
+    finally:
+        for obj_name in ["sbg", "summarizer", "img_generator", "eval"]:
+            if obj_name in locals():
+                try:
+                    obj = locals()[obj_name]
 
+                    # DiffusionPipeline GPU -> CPU 옮기기
+                    if hasattr(obj, "pipe"):
+                        try:
+                            obj.pipe.to("cpu")
+                        except:
+                            pass
+
+                    # Torch 모델 GPU -> CPU 옮기기
+                    if hasattr(obj, "to"):
+                        try:
+                            obj.to("cpu")
+                        except:
+                            pass
+
+                    # 원래 변수 자체를 해제
+                    del locals()[obj_name]
+
+                except Exception as e:
+                    print(f"[WARN] {obj_name} 메모리 해제 중 오류 발생: {e}")
+
+        gc.collect()
+        torch.cuda.empty_cache()
+        
     return GenerateStoryResponse(
         uid=req.uid,
         type=req.type,
         title=result["title"],
         contents=result["content"],
     )
-
 
 @app.post("/voices/register", response_model=VoiceRegisterResponse) 
 async def register_voice(uid: int = Form(...), audio: UploadFile = File(...), db: Session = Depends(get_db)):
