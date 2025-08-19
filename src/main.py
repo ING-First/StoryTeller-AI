@@ -401,7 +401,7 @@ async def register_voice(uid: int = Form(...), audio: UploadFile = File(...), db
 
         v = Voices(
             uid=uid,
-            voice_id="",
+            voice_id=voice_id,
             memo="", 
             voiceFile="",
             createDate=date.today()
