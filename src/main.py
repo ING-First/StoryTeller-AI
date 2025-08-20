@@ -558,7 +558,7 @@ def book_detail(
 ):
     row = (
         db.query(FairyTale)
-        .filter(FairyTale.uid == uid, FairyTale.fid == fid)
+        .filter(FairyTale.fid == fid)
         .first()
     )
 
