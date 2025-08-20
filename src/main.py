@@ -453,7 +453,14 @@ def resume_reading(uid: int, fid: int, db: Session = Depends(get_db)):
 def read_page(uid: int, fid: int, req: ReadRequest = Body(...), db: Session = Depends(get_db)):
     if not XI_API_KEY:
         raise HTTPException(status_code=500, detail="missing XI_API_KEY")
-    return reader.stream_page(db, uid, fid, page=req.page, voice_id=req.voice_id)
+    v = (
+            db.query(Voices)
+            .filter(Voices.uid == uid)
+            .order_by(Voices.createDate.desc())
+            .first()
+        )
+    voice_id = getattr(v, "voice_id", None)
+    return reader.stream_page(db, uid, fid, page=req.page, voice_id=voice_id)
 
 @app.post("/tts/stream_page")
 def tts_stream_page(req: TTSPageFromListRequest, db: Session = Depends(get_db)):
