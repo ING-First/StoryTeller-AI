@@ -173,18 +173,17 @@ class SearchResponse(BaseModel):
     results: List[FairyTaleItem]
 
 class UserUpdateRequest(BaseModel):
+    uid: int
     id: str
+    currentPasswd: str
     passwd: str
     repasswd: str
-    name: str
-    address: str
       
 class UserUpdateResponse(BaseModel):
     message: str
 
 class UserDeleteRequest(BaseModel):
     uid: int
-    passwd: str
 
 class UserDeleteResponse(BaseModel):
     message: str
@@ -481,8 +480,9 @@ def check_records(uid: int, db: Session = Depends(get_db)):
     rows = (
         db.query(FairyTale, FairyTaleLog, FairyTaleImages)
         .join(FairyTaleLog, FairyTale.fid == FairyTaleLog.fid)
-        .outerjoin(FairyTaleImages, FairyTale.fid == FairyTaleImages.fid)  # 이미지가 없을 수도 있으니 outer join
-        .filter(FairyTale.uid == uid, FairyTaleLog.uid == uid)
+        .outerjoin(FairyTaleImages, FairyTale.fid == FairyTaleImages.fid)
+        .filter(FairyTaleLog.uid == uid)
+        .group_by(FairyTaleLog.lid)
         .all()
     )
 
@@ -491,6 +491,22 @@ def check_records(uid: int, db: Session = Depends(get_db)):
 
     records = []
     for ft, log, img in rows:
+        image_url = None
+        if img and img.file_name:
+            full_image_path = f"{img.image_path}/{img.file_name}"
+            
+            if os.path.exists(full_image_path):
+                try:
+                    with open(full_image_path, "rb") as image_file:
+                        encoded = base64.b64encode(image_file.read()).decode()
+                        if img.file_name.lower().endswith('.png'):
+                            image_url = f"data:image/png;base64,{encoded}"
+                        else:
+                            image_url = f"data:image/jpeg;base64,{encoded}"
+                except Exception as e:
+                    print(f"Error encoding image: {e}")
+                    image_url = None
+
         records.append(
             RecordCheckItem(
                 fid=ft.fid,
@@ -500,7 +516,7 @@ def check_records(uid: int, db: Session = Depends(get_db)):
                 contents=ft.contents,
                 create_date=ft.createDate,
                 clips=log.clip,
-                image_url=img.image_path if img else None
+                image_url=image_url
             )
         )
 
@@ -509,6 +525,13 @@ def check_records(uid: int, db: Session = Depends(get_db)):
 # 회원정보 수정 API
 @app.post("/update_user", response_model=UserUpdateResponse)
 def update_user(req: UserUpdateRequest, db: Session = Depends(get_db), _=Depends(verify_token)):
+    if req.currentPasswd == "":
+        raise HTTPException(status_code=400, detail="현재 비밀번호를 입력해주세요.")
+    
+    user = db.query(Users).filter(Users.id == req.id, Users.useFlag == 1).first()
+    if not user or not verify_password(req.currentPasswd, user.passwd):
+        raise HTTPException(status_code=401, detail="현재 비밀번호가 일치 하지 않습니다.")
+    
     if req.passwd == "":
         raise HTTPException(status_code=400, detail="비밀번호를 입력해주세요.")
     
@@ -521,23 +544,10 @@ def update_user(req: UserUpdateRequest, db: Session = Depends(get_db), _=Depends
     if req.passwd != req.repasswd:
         raise HTTPException(status_code=400, detail="비밀번호와 비밀번호 재입력이 일치하지 않습니다.")
     
-    if req.name == "":
-        raise HTTPException(status_code=400, detail="이름을 입력해주세요.")
-    
-    if req.address == "":
-        raise HTTPException(status_code=400, detail="주소를 입력해주세요.")
-    
-    # 기존 유저 조회
-    user = db.query(Users).filter(Users.id == req.id, Users.useFlag == 1).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="해당 사용자가 존재하지 않습니다.")
-    
     # 비밀번호 해싱
     hashed_passwd = pwd_context.hash(req.passwd)
     
     user.passwd = hashed_passwd
-    user.name = req.name
-    user.address = req.address
     user.updateDate = date.today()
 
     try:
@@ -696,10 +706,6 @@ def delete_user(req: UserDeleteRequest,  db: Session = Depends(get_db), _=Depend
     if not user:
         raise HTTPException(status_code=404, detail="해당 사용자가 존재하지 않습니다.")
 
-    # 비밀번호 확인
-    if not pwd_context.verify(req.passwd, user.passwd):
-        raise HTTPException(status_code=400, detail="비밀번호가 일치하지 않습니다.")
-
     # 탈퇴 처리 (soft delete)
     user.useFlag = 0
     user.updateDate = date.today()
@@ -726,21 +732,26 @@ def user_search(req: UserUpdateSearchRequest, db: Session = Depends(get_db), _=D
         address=user.address
     )
 
-# 동화 목록 조회 
+# 동화 목록 조회
 @app.get("/api/fairy_tales/default")
 def get_default_fairy_tales(db: Session = Depends(get_db)):
     """
-    DB에 저장된 기본 동화 목록(type=1)을 가져오는 API
+    DB에 저장된 모든 동화 목록을 가져오는 API
     """
     fairy_tales_with_images = []
     
-    # FairyTale 테이블에서 type이 1인 모든 동화 조회
-    default_tales = db.query(FairyTale).filter(FairyTale.type == 1).all()
+    # FairyTale 테이블에서 모든 동화를 조회
+    all_tales = db.query(FairyTale).all()
     
     # 각 동화에 대해 이미지 정보 추가
-    for tale in default_tales:
+    for tale in all_tales:
         # FairyTaleImages 테이블에서 해당 동화의 첫 번째 이미지 경로를 조회
-        image = db.query(FairyTaleImages).filter(FairyTaleImages.fid == tale.fid).first()
+        image = db.query(FairyTaleImages).filter(FairyTaleImages.fid == tale.fid).order_by(FairyTaleImages.image_id.asc()).first()
+        image_data = None
+
+        if image and os.path.exists(image.image_path):
+            with open(image.image_path, 'rb') as f:
+                image_data = base64.b64encode(f.read()).decode('utf-8')
         
         # 동화 객체와 이미지 경로를 합쳐서 결과 리스트에 추가
         fairy_tales_with_images.append({
@@ -750,10 +761,9 @@ def get_default_fairy_tales(db: Session = Depends(get_db)):
             "summary": tale.summary,
             "contents": tale.contents,
             "createDate": tale.createDate,
-            "image_path": image.image_path if image else None, # 이미지가 없을 경우 None
+            "image": image_data, # base64로 인코딩된 이미지 데이터를 반환
         })
 
-    # 프론트엔드가 요구하는 데이터 형식(FairyTaleResponse)에 맞게 반환
     return {"data": fairy_tales_with_images}
 
 # 폴더 내 모든 이미지를 정렬된 순서로 조회
