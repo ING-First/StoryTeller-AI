@@ -773,7 +773,6 @@ async def get_all_images(folder_path: str):
     if not image_files:
         raise HTTPException(status_code=404, detail="이미지 파일을 찾을 수 없습니다")
     
-    # 파일명으로 정렬 (마리오의 꿈_000001, 마리오의 꿈_000002 순서)
     image_files.sort()
     
     # 모든 이미지를 base64로 인코딩
