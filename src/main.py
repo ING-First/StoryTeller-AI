@@ -65,17 +65,6 @@ def get_db():
     finally:
         db.close()
 
-def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
-    token = credentials.credentials
-    try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        return True
-    except jwt.ExpiredSignatureError:
-        raise HTTPException(status_code=401, detail="토큰이 만료되었습니다.")
-    except jwt.InvalidTokenError:
-        raise HTTPException(status_code=401, detail="유효하지 않은 토큰입니다.")
-    
-
 class VoiceRegisterResponse(BaseModel): 
     message: str
 
@@ -300,7 +289,7 @@ def login(req: LoginRequest, db: Session = Depends(get_db)):
 
 # 동화 생성 API
 @app.post("/generate", response_model=GenerateStoryResponse)
-def generate(req: GenerateStoryRequest, db: Session = Depends(get_db), _=Depends(verify_token)):
+def generate(req: GenerateStoryRequest, db: Session = Depends(get_db)):
     try:
         count = 1        
         while count <= 10:
@@ -409,7 +398,7 @@ def generate(req: GenerateStoryRequest, db: Session = Depends(get_db), _=Depends
     return GenerateStoryResponse(message="동화생성을 완료했습니다.", fid=story.fid)
 
 @app.post("/voices/register", response_model=VoiceRegisterResponse) 
-async def register_voice(uid: int = Form(...), audio: UploadFile = File(...), db: Session = Depends(get_db), _=Depends(verify_token)):
+async def register_voice(uid: int = Form(...), audio: UploadFile = File(...), db: Session = Depends(get_db)):
     if not XI_API_KEY:
         raise HTTPException(status_code=500, detail="missing XI_API_KEY")
 
@@ -532,7 +521,7 @@ def check_records(uid: int, db: Session = Depends(get_db)):
 
 # 회원정보 수정 API
 @app.post("/update_user", response_model=UserUpdateResponse)
-def update_user(req: UserUpdateRequest, db: Session = Depends(get_db), _=Depends(verify_token)):
+def update_user(req: UserUpdateRequest, db: Session = Depends(get_db)):
     if req.currentPasswd == "":
         raise HTTPException(status_code=400, detail="현재 비밀번호를 입력해주세요.")
     
@@ -708,7 +697,7 @@ def search_books(
 
 # 회원 탈퇴 API
 @app.post("/delete_user", response_model=UserDeleteResponse)
-def delete_user(req: UserDeleteRequest,  db: Session = Depends(get_db), _=Depends(verify_token)):
+def delete_user(req: UserDeleteRequest,  db: Session = Depends(get_db)):
     # 유저 조회
     user = db.query(Users).filter(Users.uid == req.uid, Users.useFlag == 1).first()
     if not user:
@@ -729,7 +718,7 @@ def delete_user(req: UserDeleteRequest,  db: Session = Depends(get_db), _=Depend
 
 # 회원 정보수정 사용자 정보 조회
 @app.post("/user_update_search", response_model=UserUpdateSearchResponse)
-def user_search(req: UserUpdateSearchRequest, db: Session = Depends(get_db), _=Depends(verify_token)):
+def user_search(req: UserUpdateSearchRequest, db: Session = Depends(get_db)):
     user = db.query(Users).filter(Users.uid == req.uid, Users.useFlag == 1).first()
     if not user:
         raise HTTPException(status_code=404, detail="해당 사용자가 존재하지 않습니다.")
