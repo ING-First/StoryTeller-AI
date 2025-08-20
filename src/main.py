@@ -733,22 +733,26 @@ def user_search(req: UserUpdateSearchRequest, db: Session = Depends(get_db)):
 @app.get("/api/fairy_tales/default")
 def get_default_fairy_tales(db: Session = Depends(get_db)):
     """
-    DB에 저장된 모든 동화 목록을 가져오는 API
+    DB에 저장된 모든 동화 목록을 가져오는 API (중복 제거)
     """
     fairy_tales_with_images = []
-    
-    # FairyTale 테이블에서 모든 동화를 조회
-    all_tales = db.query(FairyTale).all()
-    
-    # 각 동화에 대해 이미지 정보 추가
-    for tale in all_tales:
-        # FairyTaleImages 테이블에서 해당 동화의 첫 번째 이미지 경로를 조회
-        image = db.query(FairyTaleImages).filter(FairyTaleImages.fid == tale.fid).order_by(FairyTaleImages.image_id.asc()).group_by(FairyTaleImages.fid).first()
-        image_data = None
 
+    # FairyTale과 FairyTaleImages를 조인해서 각 동화별 첫 번째 이미지만 가져오기
+    tales_with_images = (
+        db.query(
+            FairyTale,
+            FairyTaleImages
+        )
+        .outerjoin(FairyTaleImages, FairyTale.fid == FairyTaleImages.fid)
+        .group_by(FairyTale.fid)  # fid 기준으로 그룹화 (중복 제거)
+        .order_by(FairyTale.fid, FairyTaleImages.image_id.asc())
+        .all()
+    )
+
+    for tale, image in tales_with_images:
+        image_data = None
         if image and image.file_name:
             full_image_path = f"{image.image_path}/{image.file_name}"
-            
             if os.path.exists(full_image_path):
                 try:
                     with open(full_image_path, "rb") as image_file:
@@ -760,8 +764,7 @@ def get_default_fairy_tales(db: Session = Depends(get_db)):
                 except Exception as e:
                     print(f"Error encoding image: {e}")
                     image_data = None
-        
-        # 동화 객체와 이미지 경로를 합쳐서 결과 리스트에 추가
+
         fairy_tales_with_images.append({
             "fid": tale.fid,
             "uid": tale.uid,
@@ -769,10 +772,11 @@ def get_default_fairy_tales(db: Session = Depends(get_db)):
             "summary": tale.summary,
             "contents": tale.contents,
             "createDate": tale.createDate,
-            "image": image_data, # base64로 인코딩된 이미지 데이터를 반환
+            "image": image_data,  # base64 인코딩된 이미지
         })
 
     return {"data": fairy_tales_with_images}
+
 
 # 폴더 내 모든 이미지를 정렬된 순서로 조회
 @app.get("/images/all")
