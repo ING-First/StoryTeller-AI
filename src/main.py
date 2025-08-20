@@ -113,7 +113,8 @@ class LoginRequest(BaseModel):
     passwd: str
 
 class LoginResponse(BaseModel):
-    message: str
+    uid: int
+    name: str
     access_token: str
     token_type: str
 
@@ -272,7 +273,11 @@ def login(req: LoginRequest, db: Session = Depends(get_db)):
         expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     )
 
-    return LoginResponse(message="로그인되었습니다.", access_token=access_token, token_type="bearer")
+    return LoginResponse( 
+        uid=user.uid,
+        name=user.name,
+        access_token=access_token, 
+        token_type="bearer")
 
 # 동화 생성 API
 @app.post("/generate", response_model=GenerateStoryResponse)
