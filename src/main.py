@@ -95,6 +95,7 @@ class GenerateStoryRequest(BaseModel):
 
 class GenerateStoryResponse(BaseModel):
     message: str
+    fid: int
         
 class GenerateRequest(BaseModel):
     uid: int
@@ -130,14 +131,19 @@ class LoginResponse(BaseModel):
     access_token: str
     token_type: str
 
-class RecordCheckResponse(BaseModel):
-    uid: int
+class RecordCheckItem(BaseModel):
+    fid: int
     type: int
     title: str
     summary: str
     contents: str
-    create_dates: date
+    create_date: date
     clips: int
+    image_url: str | None
+
+class RecordCheckResponse(BaseModel):
+    uid: int
+    records: List[RecordCheckItem]
     
 class DetailResponse(BaseModel):
     uid: int
@@ -281,7 +287,7 @@ def login(req: LoginRequest, db: Session = Depends(get_db)):
         raise HTTPException(status_code=401, detail="아이디 또는 비밀번호가 잘못되었습니다.")
     
     access_token = create_access_token(
-        data={"sub": user.id},
+        data={"sub": user.uid},
         expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     )
 
@@ -399,7 +405,7 @@ def generate(req: GenerateStoryRequest, db: Session = Depends(get_db), _=Depends
         gc.collect()
         torch.cuda.empty_cache()
         
-    return GenerateStoryResponse(message="동화생성을 완료했습니다.")
+    return GenerateStoryResponse(message="동화생성을 완료했습니다.", fid=story.fid)
 
 @app.post("/voices/register", response_model=VoiceRegisterResponse) 
 async def register_voice(uid: int = Form(...), audio: UploadFile = File(...), db: Session = Depends(get_db), _=Depends(verify_token)):
@@ -469,35 +475,34 @@ def tts_stream_page(req: TTSPageFromListRequest, db: Session = Depends(get_db)):
     
 # Backend API: 나의 독서기록 조회
 @app.get("/users/{uid}/check_records", response_model=RecordCheckResponse)
-def check_records(
-    uid: int, 
-    fid: int = Query(..., description="동화 ID"),
-    db: Session = Depends(get_db)
-    ):
-    
-    row = (
-        db.query(FairyTale, FairyTaleLog)
+def check_records(uid: int, db: Session = Depends(get_db)):
+    rows = (
+        db.query(FairyTale, FairyTaleLog, FairyTaleImages)
         .join(FairyTaleLog, FairyTale.fid == FairyTaleLog.fid)
+        .outerjoin(FairyTaleImages, FairyTale.fid == FairyTaleImages.fid)  # 이미지가 없을 수도 있으니 outer join
         .filter(FairyTale.uid == uid, FairyTaleLog.uid == uid)
-        .filter(FairyTale.fid == fid, FairyTaleLog.fid == fid)
-        .first()
+        .all()
     )
 
-    # 조회 기록이 없는 경우 Error Message 출력
-    if not row:
-        raise HTTPException(status_code=404, detail="기록을 찾을 수 없음")
+    if not rows:
+        raise HTTPException(status_code=404, detail="읽은 기록이 없음")
 
-    ft, log = row
-    return RecordCheckResponse(
-        uid=uid,
-        type=ft.type,
-        title=ft.title,
-        summary=ft.summary,
-        contents=ft.contents,
-        create_dates=ft.createDate,
-        clips=log.clip,
-    )
+    records = []
+    for ft, log, img in rows:
+        records.append(
+            RecordCheckItem(
+                fid=ft.fid,
+                type=ft.type,
+                title=ft.title,
+                summary=ft.summary,
+                contents=ft.contents,
+                create_date=ft.createDate,
+                clips=log.clip,
+                image_url=img.image_path if img else None
+            )
+        )
 
+    return RecordCheckResponse(uid=uid, records=records)
 
 # 회원정보 수정 API
 @app.post("/update_user", response_model=UserUpdateResponse)
