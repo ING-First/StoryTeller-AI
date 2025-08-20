@@ -1,5 +1,5 @@
 from typing import Union, Optional, List
-from fastapi.security import OAuth2PasswordBearer
+from fastapi.security import OAuth2PasswordBearer, HTTPBearer, HTTPAuthorizationCredentials
 from fastapi import FastAPI, Depends, HTTPException, UploadFile,  Query, Path, File, Form, Body
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -41,6 +41,8 @@ reader = StoryReader()
 
 load_dotenv(override=False)
 
+security = HTTPBearer()
+
 SECRET_KEY = os.getenv("SECRET_KEY")
 ALGORITHM = os.getenv("ALGORITHM")
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES"))
@@ -60,6 +62,17 @@ def get_db():
         yield db
     finally:
         db.close()
+
+def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    token = credentials.credentials
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        return True
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="토큰이 만료되었습니다.")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="유효하지 않은 토큰입니다.")
+    
 
 class VoiceRegisterResponse(BaseModel): 
     message: str
@@ -106,7 +119,6 @@ class UserRequest(BaseModel):
       
 class UserResponse(BaseModel):
     message: str
-    id: str
 
 class LoginRequest(BaseModel):
     id: str
@@ -239,7 +251,7 @@ def join(req: UserRequest, db: Session = Depends(get_db)):
       db.rollback()
       raise HTTPException(status_code=500, detail=f"서버 내부에 오류가 발생했습니다.")
 
-    return UserResponse(message="회원가입이 완료되었습니다.", id=user.id)
+    return UserResponse(message="회원가입이 완료되었습니다.")
 
 
 # 비밀번호 체크
@@ -281,7 +293,7 @@ def login(req: LoginRequest, db: Session = Depends(get_db)):
 
 # 동화 생성 API
 @app.post("/generate", response_model=GenerateStoryResponse)
-def generate(req: GenerateStoryRequest, db: Session = Depends(get_db)):
+def generate(req: GenerateStoryRequest, db: Session = Depends(get_db), _=Depends(verify_token)):
     try:
         count = 1        
         while count <= 10:
@@ -390,7 +402,7 @@ def generate(req: GenerateStoryRequest, db: Session = Depends(get_db)):
     return GenerateStoryResponse(message="동화생성을 완료했습니다.")
 
 @app.post("/voices/register", response_model=VoiceRegisterResponse) 
-async def register_voice(uid: int = Form(...), audio: UploadFile = File(...), db: Session = Depends(get_db)):
+async def register_voice(uid: int = Form(...), audio: UploadFile = File(...), db: Session = Depends(get_db), _=Depends(verify_token)):
     if not XI_API_KEY:
         raise HTTPException(status_code=500, detail="missing XI_API_KEY")
 
@@ -489,7 +501,7 @@ def check_records(
 
 # 회원정보 수정 API
 @app.post("/update_user", response_model=UserUpdateResponse)
-def join(req: UserUpdateRequest, db: Session = Depends(get_db)):
+def update_user(req: UserUpdateRequest, db: Session = Depends(get_db), _=Depends(verify_token)):
     if req.passwd == "":
         raise HTTPException(status_code=400, detail="비밀번호를 입력해주세요.")
     
@@ -671,7 +683,7 @@ def search_books(
 
 # 회원 탈퇴 API
 @app.post("/delete_user", response_model=UserDeleteResponse)
-def delete_user(req: UserDeleteRequest,  db: Session = Depends(get_db)):
+def delete_user(req: UserDeleteRequest,  db: Session = Depends(get_db), _=Depends(verify_token)):
     # 유저 조회
     user = db.query(Users).filter(Users.uid == req.uid, Users.useFlag == 1).first()
     if not user:
@@ -696,7 +708,7 @@ def delete_user(req: UserDeleteRequest,  db: Session = Depends(get_db)):
 
 # 회원 정보수정 사용자 정보 조회
 @app.post("/user_update_search", response_model=UserUpdateSearchResponse)
-def login(req: UserUpdateSearchRequest, db: Session = Depends(get_db)):
+def user_search(req: UserUpdateSearchRequest, db: Session = Depends(get_db), _=Depends(verify_token)):
     user = db.query(Users).filter(Users.uid == req.uid, Users.useFlag == 1).first()
     if not user:
         raise HTTPException(status_code=404, detail="해당 사용자가 존재하지 않습니다.")
