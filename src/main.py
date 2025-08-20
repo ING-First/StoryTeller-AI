@@ -689,10 +689,6 @@ def delete_user(req: UserDeleteRequest,  db: Session = Depends(get_db), _=Depend
     if not user:
         raise HTTPException(status_code=404, detail="해당 사용자가 존재하지 않습니다.")
 
-    # 비밀번호 확인
-    if not pwd_context.verify(req.passwd, user.passwd):
-        raise HTTPException(status_code=400, detail="비밀번호가 일치하지 않습니다.")
-
     # 탈퇴 처리 (soft delete)
     user.useFlag = 0
     user.updateDate = date.today()
