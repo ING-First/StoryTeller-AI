@@ -289,7 +289,7 @@ def login(req: LoginRequest, db: Session = Depends(get_db)):
         raise HTTPException(status_code=401, detail="아이디 또는 비밀번호가 잘못되었습니다.")
     
     access_token = create_access_token(
-        data={"sub": str(user.uid)},
+        data={"sub": user.uid},
         expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     )
 
@@ -740,7 +740,12 @@ def get_default_fairy_tales(db: Session = Depends(get_db)):
     # 각 동화에 대해 이미지 정보 추가
     for tale in all_tales:
         # FairyTaleImages 테이블에서 해당 동화의 첫 번째 이미지 경로를 조회
-        image = db.query(FairyTaleImages).filter(FairyTaleImages.fid == tale.fid).first()
+        image = db.query(FairyTaleImages).filter(FairyTaleImages.fid == tale.fid).order_by(FairyTaleImages.image_id.asc()).first()
+        image_data = None
+
+        if image and os.path.exists(image.image_path):
+            with open(image.image_path, 'rb') as f:
+                image_data = base64.b64encode(f.read()).decode('utf-8')
         
         # 동화 객체와 이미지 경로를 합쳐서 결과 리스트에 추가
         fairy_tales_with_images.append({
@@ -750,11 +755,10 @@ def get_default_fairy_tales(db: Session = Depends(get_db)):
             "summary": tale.summary,
             "contents": tale.contents,
             "createDate": tale.createDate,
-            "image_path": image.image_path if image else None, # 이미지가 없을 경우 None
+            "image": image_data, # base64로 인코딩된 이미지 데이터를 반환
         })
 
     return {"data": fairy_tales_with_images}
-
 
 # 폴더 내 모든 이미지를 정렬된 순서로 조회
 @app.get("/images/all")
