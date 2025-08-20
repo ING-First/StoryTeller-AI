@@ -743,7 +743,7 @@ def get_default_fairy_tales(db: Session = Depends(get_db)):
     # 각 동화에 대해 이미지 정보 추가
     for tale in all_tales:
         # FairyTaleImages 테이블에서 해당 동화의 첫 번째 이미지 경로를 조회
-        image = db.query(FairyTaleImages).filter(FairyTaleImages.fid == tale.fid).order_by(FairyTaleImages.image_id.asc()).first()
+        image = db.query(FairyTaleImages).filter(FairyTaleImages.fid == tale.fid).order_by(FairyTaleImages.image_id.asc()).group_by(FairyTaleImages.fid).first()
         image_data = None
 
         if image and image.file_name:
