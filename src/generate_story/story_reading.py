@@ -122,9 +122,10 @@ class StoryReader:
         return getattr(v, "voice_id", None) if v else None
 
     def _get_fairy_tale_or_404(self, db: Session, uid: int, fid: int) -> FairyTale:
+        print(f"[DEBUG] _get_fairy_tale_or_404 호출됨. uid: {uid}, fid: {fid}")
         ft = (
             db.query(FairyTale)
-            .filter(FairyTale.uid == uid, FairyTale.fid == fid)
+            .filter(FairyTale.fid == fid)
             .first()
         )
         if not ft:
