@@ -749,9 +749,20 @@ def get_default_fairy_tales(db: Session = Depends(get_db)):
         image = db.query(FairyTaleImages).filter(FairyTaleImages.fid == tale.fid).order_by(FairyTaleImages.image_id.asc()).first()
         image_data = None
 
-        if image and os.path.exists(image.image_path):
-            with open(image.image_path, 'rb') as f:
-                image_data = base64.b64encode(f.read()).decode('utf-8')
+        if image and image.file_name:
+            full_image_path = f"{image.image_path}/{image.file_name}"
+            
+            if os.path.exists(full_image_path):
+                try:
+                    with open(full_image_path, "rb") as image_file:
+                        encoded = base64.b64encode(image_file.read()).decode()
+                        if image.file_name.lower().endswith('.png'):
+                            image_data = f"data:image/png;base64,{encoded}"
+                        else:
+                            image_data = f"data:image/jpeg;base64,{encoded}"
+                except Exception as e:
+                    print(f"Error encoding image: {e}")
+                    image_data = None
         
         # 동화 객체와 이미지 경로를 합쳐서 결과 리스트에 추가
         fairy_tales_with_images.append({
