@@ -491,6 +491,22 @@ def check_records(uid: int, db: Session = Depends(get_db)):
 
     records = []
     for ft, log, img in rows:
+        image_url = None
+        if img and img.file_name:
+            full_image_path = f"{img.image_path}/{img.file_name}"
+            
+            if os.path.exists(full_image_path):
+                try:
+                    with open(full_image_path, "rb") as image_file:
+                        encoded = base64.b64encode(image_file.read()).decode()
+                        if img.file_name.lower().endswith('.png'):
+                            image_url = f"data:image/png;base64,{encoded}"
+                        else:
+                            image_url = f"data:image/jpeg;base64,{encoded}"
+                except Exception as e:
+                    print(f"Error encoding image: {e}")
+                    image_url = None
+
         records.append(
             RecordCheckItem(
                 fid=ft.fid,
