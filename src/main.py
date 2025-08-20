@@ -459,6 +459,7 @@ def read_page(uid: int, fid: int, req: ReadRequest = Body(...), db: Session = De
             .order_by(Voices.createDate.desc())
             .first()
         )
+    # voice_id db 조회
     voice_id = getattr(v, "voice_id", None)
     return reader.stream_page(db, uid, fid, page=req.page, voice_id=voice_id)
 
