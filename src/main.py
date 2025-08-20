@@ -173,18 +173,17 @@ class SearchResponse(BaseModel):
     results: List[FairyTaleItem]
 
 class UserUpdateRequest(BaseModel):
+    uid: int
     id: str
+    currentPasswd: str
     passwd: str
     repasswd: str
-    name: str
-    address: str
       
 class UserUpdateResponse(BaseModel):
     message: str
 
 class UserDeleteRequest(BaseModel):
     uid: int
-    passwd: str
 
 class UserDeleteResponse(BaseModel):
     message: str
@@ -481,8 +480,9 @@ def check_records(uid: int, db: Session = Depends(get_db)):
     rows = (
         db.query(FairyTale, FairyTaleLog, FairyTaleImages)
         .join(FairyTaleLog, FairyTale.fid == FairyTaleLog.fid)
-        .outerjoin(FairyTaleImages, FairyTale.fid == FairyTaleImages.fid)  # 이미지가 없을 수도 있으니 outer join
-        .filter(FairyTale.uid == uid, FairyTaleLog.uid == uid)
+        .outerjoin(FairyTaleImages, FairyTale.fid == FairyTaleImages.fid)
+        .filter(FairyTaleLog.uid == uid)
+        .group_by(FairyTaleLog.lid)
         .all()
     )
 
@@ -509,6 +509,13 @@ def check_records(uid: int, db: Session = Depends(get_db)):
 # 회원정보 수정 API
 @app.post("/update_user", response_model=UserUpdateResponse)
 def update_user(req: UserUpdateRequest, db: Session = Depends(get_db), _=Depends(verify_token)):
+    if req.currentPasswd == "":
+        raise HTTPException(status_code=400, detail="현재 비밀번호를 입력해주세요.")
+    
+    user = db.query(Users).filter(Users.id == req.id, Users.useFlag == 1).first()
+    if not user or not verify_password(req.currentPasswd, user.passwd):
+        raise HTTPException(status_code=401, detail="현재 비밀번호가 일치 하지 않습니다.")
+    
     if req.passwd == "":
         raise HTTPException(status_code=400, detail="비밀번호를 입력해주세요.")
     
@@ -521,23 +528,10 @@ def update_user(req: UserUpdateRequest, db: Session = Depends(get_db), _=Depends
     if req.passwd != req.repasswd:
         raise HTTPException(status_code=400, detail="비밀번호와 비밀번호 재입력이 일치하지 않습니다.")
     
-    if req.name == "":
-        raise HTTPException(status_code=400, detail="이름을 입력해주세요.")
-    
-    if req.address == "":
-        raise HTTPException(status_code=400, detail="주소를 입력해주세요.")
-    
-    # 기존 유저 조회
-    user = db.query(Users).filter(Users.id == req.id, Users.useFlag == 1).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="해당 사용자가 존재하지 않습니다.")
-    
     # 비밀번호 해싱
     hashed_passwd = pwd_context.hash(req.passwd)
     
     user.passwd = hashed_passwd
-    user.name = req.name
-    user.address = req.address
     user.updateDate = date.today()
 
     try:
@@ -695,10 +689,6 @@ def delete_user(req: UserDeleteRequest,  db: Session = Depends(get_db), _=Depend
     user = db.query(Users).filter(Users.uid == req.uid, Users.useFlag == 1).first()
     if not user:
         raise HTTPException(status_code=404, detail="해당 사용자가 존재하지 않습니다.")
-
-    # 비밀번호 확인
-    if not pwd_context.verify(req.passwd, user.passwd):
-        raise HTTPException(status_code=400, detail="비밀번호가 일치하지 않습니다.")
 
     # 탈퇴 처리 (soft delete)
     user.useFlag = 0
