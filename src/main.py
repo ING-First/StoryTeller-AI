@@ -482,7 +482,7 @@ def check_records(uid: int, db: Session = Depends(get_db)):
         .join(FairyTaleLog, FairyTale.fid == FairyTaleLog.fid)
         .outerjoin(FairyTaleImages, FairyTale.fid == FairyTaleImages.fid)
         .filter(FairyTaleLog.uid == uid)
-        .group_by(FairyTale.fid, FairyTaleLog.id, FairyTaleImages.id)
+        .group_by(FairyTaleLog.lid)
         .all()
     )
 
