@@ -135,14 +135,21 @@ class DetailResponse(BaseModel):
     create_dates: date
     image_url: str
     
+class PageItem(BaseModel):
+    text: Optional[str]
+    image: Optional[str]
+
+class FairyTaleItem(BaseModel):
+    uid: int
+    fid: int
+    type: int
+    title: str
+    summary: str
+    create_date: date
+    pages: List[PageItem]
+
 class SearchResponse(BaseModel):
-    uid: List[int]
-    fid: List[int]
-    type: List[int]
-    title: List[str]
-    summary: List[str]
-    contents: List[str]
-    create_dates: List[date]
+    results: List[FairyTaleItem]
 
 class UserUpdateRequest(BaseModel):
     id: str
@@ -562,44 +569,100 @@ def search_books(
     title: Optional[str] = Query(None, description="책 제목 (검색용)"),
     db: Session = Depends(get_db)):
     
-    query = db.query(FairyTale)
-    query = query.filter(or_(FairyTale.uid == uid, FairyTale.uid == 0))
-    
-    # fid가 있으면 fid 필터 검색
+    def _split_sentences_kor(text: str) -> List[str]:
+        sentences = re.split(r'(?<=[.!?])\s+', text.strip())
+        return [s for s in sentences if s]
+
+    def _split_into_chunks(contents: str) -> List[str]:
+        sents = _split_sentences_kor(contents or "")
+        chunks: List[str] = []
+        for i in range(0, len(sents), 2):
+            chunk = " ".join(sents[i:i+2]).strip()
+            if chunk:
+                chunks.append(chunk)
+        return chunks
+
+    def build_pages(chunks: List[str], images: List[str]) -> List[dict]:
+        pages = []
+        max_len = max(len(chunks), len(images))
+        for i in range(max_len):
+            text = chunks[i] if i < len(chunks) else None
+            image = images[i] if i < len(images) else None
+            pages.append({"text": text, "image": image})
+        return pages
+
+    query = db.query(FairyTale).filter(or_(FairyTale.uid == uid, FairyTale.uid == 0))
+
+    # fid가 있으면 단일 검색
     if fid is not None:
         record = query.filter(FairyTale.fid == fid).first()
         if not record:
             raise HTTPException(status_code=404, detail="해당 동화를 찾을 수 없음")
-        
-        return SearchResponse(
-            uid=[record.uid],
-            fid=[record.fid],
-            type=[record.type],
-            title=[record.title],
-            summary=[record.summary],
-            contents=[record.contents],
-            create_dates=[record.createDate],
+
+        # contents 분리
+        chunks = _split_into_chunks(record.contents)
+
+        # 이미지 로드
+        images = (
+            db.query(FairyTaleImages)
+            .filter(FairyTaleImages.fid == record.fid)
+            .order_by(FairyTaleImages.image_id.asc())
+            .all()
         )
-            
-    # type이 있으면 type 필터 검색
+        image_paths = [img.image_path for img in images]
+
+        # 페이지 구성
+        pages = build_pages(chunks, image_paths)
+
+        return SearchResponse(
+            results=[
+                FairyTaleItem(
+                    uid=record.uid,
+                    fid=record.fid,
+                    type=record.type,
+                    title=record.title,
+                    summary=record.summary,
+                    create_date=record.createDate,
+                    pages=[PageItem(**p) for p in pages]
+                )
+            ]
+        )
+
+    # type/title 필터 추가
     if type is not None:
         query = query.filter(FairyTale.type == type)
-    
-    # 제목이 있으면 제목 필터 검색
     if title:
         query = query.filter(FairyTale.title.contains(title))
-        
-    records = query.all()
 
-    return SearchResponse(
-        uid=[r.uid for r in records],
-        fid=[r.fid for r in records],
-        type=[r.type for r in records],
-        title=[r.title for r in records],
-        summary=[r.summary for r in records],
-        contents=[r.contents for r in records],
-        create_dates=[r.createDate for r in records],
-    )
+    records = query.all()
+    if not records:
+        raise HTTPException(status_code=404, detail="검색 결과 없음")
+
+    results = []
+    for r in records:
+        chunks = _split_into_chunks(r.contents)
+        images = (
+            db.query(FairyTaleImages)
+            .filter(FairyTaleImages.fid == r.fid)
+            .order_by(FairyTaleImages.image_id.asc())
+            .all()
+        )
+        image_paths = [img.image_path for img in images]
+        pages = build_pages(chunks, image_paths)
+
+        results.append(
+            FairyTaleItem(
+                uid=r.uid,
+                fid=r.fid,
+                type=r.type,
+                title=r.title,
+                summary=r.summary,
+                create_date=r.createDate,
+                pages=[PageItem(**p) for p in pages]
+            )
+        )
+
+    return SearchResponse(results=results)
 
 # 회원 탈퇴 API
 @app.post("/delete_user", response_model=UserDeleteResponse)
