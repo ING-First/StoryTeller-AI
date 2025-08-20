@@ -136,7 +136,8 @@ class DetailResponse(BaseModel):
     image_url: str
     
 class SearchResponse(BaseModel):
-    uid: int
+    uid: List[int]
+    fid: List[int]
     type: List[int]
     title: List[str]
     summary: List[str]
@@ -556,25 +557,43 @@ def book_detail(
 @app.get("/users/{uid}/search", response_model=SearchResponse)
 def search_books(
     uid: int = Path(..., description="사용자 ID"),
+    fid: Optional[int] = Query(None, description="동화 ID"),
     type: Optional[int] = Query(None, description="기록 타입"),
     title: Optional[str] = Query(None, description="책 제목 (검색용)"),
     db: Session = Depends(get_db)):
     
     query = db.query(FairyTale)
     query = query.filter(or_(FairyTale.uid == uid, FairyTale.uid == 0))
+    
+    # fid가 있으면 fid 필터 검색
+    if fid is not None:
+        record = query.filter(FairyTale.fid == fid).first()
+        if not record:
+            raise HTTPException(status_code=404, detail="해당 동화를 찾을 수 없음")
         
-    # uid가 있는 경우에만 type 필터 검색
+        return SearchResponse(
+            uid=[record.uid],
+            fid=[record.fid],
+            type=[record.type],
+            title=[record.title],
+            summary=[record.summary],
+            contents=[record.contents],
+            create_dates=[record.createDate],
+        )
+            
+    # type이 있으면 type 필터 검색
     if type is not None:
         query = query.filter(FairyTale.type == type)
     
-    # 제목 필터 검색
+    # 제목이 있으면 제목 필터 검색
     if title:
         query = query.filter(FairyTale.title.contains(title))
         
     records = query.all()
-    
+
     return SearchResponse(
-        uid=uid,
+        uid=[r.uid for r in records],
+        fid=[r.fid for r in records],
         type=[r.type for r in records],
         title=[r.title for r in records],
         summary=[r.summary for r in records],
