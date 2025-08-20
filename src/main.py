@@ -718,3 +718,33 @@ def user_search(req: UserUpdateSearchRequest, db: Session = Depends(get_db), _=D
         name=user.name,
         address=user.address
     )
+
+# 동화 목록 조회 
+@app.get("/api/fairy_tales/default")
+def get_default_fairy_tales(db: Session = Depends(get_db)):
+    """
+    DB에 저장된 기본 동화 목록(type=1)을 가져오는 API
+    """
+    fairy_tales_with_images = []
+    
+    # FairyTale 테이블에서 type이 1인 모든 동화 조회
+    default_tales = db.query(FairyTale).filter(FairyTale.type == 1).all()
+    
+    # 각 동화에 대해 이미지 정보 추가
+    for tale in default_tales:
+        # FairyTaleImages 테이블에서 해당 동화의 첫 번째 이미지 경로를 조회
+        image = db.query(FairyTaleImages).filter(FairyTaleImages.fid == tale.fid).first()
+        
+        # 동화 객체와 이미지 경로를 합쳐서 결과 리스트에 추가
+        fairy_tales_with_images.append({
+            "fid": tale.fid,
+            "uid": tale.uid,
+            "title": tale.title,
+            "summary": tale.summary,
+            "contents": tale.contents,
+            "createDate": tale.createDate,
+            "image_path": image.image_path if image else None, # 이미지가 없을 경우 None
+        })
+
+    # 프론트엔드가 요구하는 데이터 형식(FairyTaleResponse)에 맞게 반환
+    return {"data": fairy_tales_with_images}
