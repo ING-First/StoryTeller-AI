@@ -478,12 +478,12 @@ def tts_stream_page(req: TTSPageFromListRequest, db: Session = Depends(get_db)):
 @app.get("/users/{uid}/check_records", response_model=RecordCheckResponse)
 def check_records(uid: int, db: Session = Depends(get_db)):
     rows = (
-        db.query(FairyTale) \
-        .join(FairyTaleLog, FairyTale.fid == FairyTaleLog.fid) \
-        .filter(FairyTaleLog.uid == uid) \
-        .distinct() \
+        db.query(FairyTale, FairyTaleLog, FairyTaleImages)
+        .join(FairyTaleLog, FairyTale.fid == FairyTaleLog.fid)
+        .outerjoin(FairyTaleImages, FairyTale.fid == FairyTaleImages.fid)
+        .filter(FairyTaleLog.uid == uid)
+        .group_by(FairyTale.fid, FairyTaleLog.id, FairyTaleImages.id)
         .all()
-
     )
 
     if not rows:
