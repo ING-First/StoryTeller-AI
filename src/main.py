@@ -25,6 +25,7 @@ import httpx
 import gc
 import torch
 import logging
+import base64
 
 app = FastAPI()
 app.add_middleware(
@@ -753,3 +754,46 @@ def get_default_fairy_tales(db: Session = Depends(get_db)):
 
     # 프론트엔드가 요구하는 데이터 형식(FairyTaleResponse)에 맞게 반환
     return {"data": fairy_tales_with_images}
+
+# 폴더 내 모든 이미지를 정렬된 순서로 조회
+@app.get("/images/all")
+async def get_all_images(folder_path: str):
+    """폴더 내 모든 이미지를 정렬된 순서로 조회"""
+    if not os.path.exists(folder_path):
+        raise HTTPException(status_code=404, detail="폴더를 찾을 수 없습니다")
+    
+    # 이미지 파일 확장자
+    image_extensions = ['*.jpg', '*.jpeg', '*.png', '*.gif', '*.bmp']
+    
+    image_files = []
+    for ext in image_extensions:
+        image_files.extend(glob.glob(os.path.join(folder_path, ext)))
+        image_files.extend(glob.glob(os.path.join(folder_path, ext.upper())))
+    
+    if not image_files:
+        raise HTTPException(status_code=404, detail="이미지 파일을 찾을 수 없습니다")
+    
+    # 파일명으로 정렬 (마리오의 꿈_000001, 마리오의 꿈_000002 순서)
+    image_files.sort()
+    
+    # 모든 이미지를 base64로 인코딩
+    import base64
+    images_data = []
+    
+    for i, image_file in enumerate(image_files):
+        try:
+            with open(image_file, 'rb') as f:
+                image_data = base64.b64encode(f.read()).decode()
+                images_data.append({
+                    "index": i + 1,
+                    "filename": os.path.basename(image_file),
+                    "image": image_data
+                })
+        except Exception as e:
+            continue
+    
+    return {
+        "folder_path": folder_path,
+        "total_count": len(images_data),
+        "images": images_data
+    }

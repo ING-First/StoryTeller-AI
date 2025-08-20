@@ -12,7 +12,7 @@ class ImageGenerator:
 
         BASE_DIR = Path(__file__).resolve().parent.parent
         self.lora_path = BASE_DIR.parent / "models" / "lora-diffusion-weight"
-        self.save_path = BASE_DIR.parent / "fairyTale_images"
+        self.save_path = "/content/gdrive/MyDrive/Colab Notebooks/fairyTale_images"
 
         self.pipeline = None
 
