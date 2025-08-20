@@ -481,7 +481,7 @@ def check_records(uid: int, db: Session = Depends(get_db)):
         db.query(FairyTale, FairyTaleLog, FairyTaleImages)
         .join(FairyTaleLog, FairyTale.fid == FairyTaleLog.fid)
         .outerjoin(FairyTaleImages, FairyTale.fid == FairyTaleImages.fid)  # 이미지가 없을 수도 있으니 outer join
-        .filter(FairyTale.uid == uid, FairyTaleLog.uid == uid)
+        .filter(FairyTaleLog.uid == uid)
         .all()
     )
 
