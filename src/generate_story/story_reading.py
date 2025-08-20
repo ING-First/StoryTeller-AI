@@ -9,22 +9,43 @@ from db.db_models import FairyTale, FairyTaleLog, Voices
 from generate_story.generate_sound import SoundGenerator
 
 def _as_pages(contents: Union[List[str], str, None]) -> List[str]:
+    print(f"[DEBUG] _as_pages 호출됨. contents 타입: {type(contents)}, 값: {contents}")
     if contents is None:
+        print("[DEBUG] contents가 None임")
         return []
     if isinstance(contents, list):
-        return [p.strip() for p in contents if (p or "").strip()]
+        result = [p.strip() for p in contents if (p or "").strip()]
+        print(f"[DEBUG] list 형태로 처리됨. 결과: {result}")
+        return result
+    
     # TEXT에 JSON 배열 문자열로 저장된 경우
     text = contents.strip()
     if not text:
+        print("[DEBUG] contents가 빈 문자열임")
         return []
+    
     try:
         parsed = json.loads(text)
         if isinstance(parsed, list):
-            return [str(p).strip() for p in parsed if str(p).strip()]
-    except Exception:
-        pass
-    return []
-
+            result = [str(p).strip() for p in parsed if str(p).strip()]
+            return result
+    except Exception as e:
+        print(f"[DEBUG] JSON 파싱 실패: {e}")
+        print("[DEBUG] 문자열을 문장 단위로 분할 시도")
+        
+    # 문자열을 문장 단위로 분할 후 2문장씩 묶기
+    import re
+    sentences = re.split(r'(?<=[.!?])\s+', text)
+    sentences = [s.strip() for s in sentences if s.strip()]
+    
+    # 2문장씩 묶어서 페이지 생성
+    pages = []
+    for i in range(0, len(sentences), 2):
+        page_sentences = sentences[i:i+2]  # 2개씩 가져오기
+        page_text = ' '.join(page_sentences)
+        pages.append(page_text)
+    
+    return pages
 
 class StoryReader:
 
@@ -124,7 +145,7 @@ class StoryReader:
     def _get_fairy_tale_or_404(self, db: Session, uid: int, fid: int) -> FairyTale:
         ft = (
             db.query(FairyTale)
-            .filter(FairyTale.uid == uid, FairyTale.fid == fid)
+            .filter(FairyTale.fid == fid)
             .first()
         )
         if not ft:
