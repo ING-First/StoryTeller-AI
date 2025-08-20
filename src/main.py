@@ -726,22 +726,23 @@ def user_search(req: UserUpdateSearchRequest, db: Session = Depends(get_db), _=D
         address=user.address
     )
 
-# 현재 유저가 생성한 동화까지 포함하여 목록 조회
-@app.get("/api/fairy_tales/all/{uid}")
-def get_all_fairy_tales(uid: int, db: Session = Depends(get_db)):
+# 동화 목록 조회
+@app.get("/api/fairy_tales/default")
+def get_default_fairy_tales(db: Session = Depends(get_db)):
     """
-    기본 동화(uid=0)와 특정 유저가 생성한 동화를 모두 가져오는 API
+    DB에 저장된 모든 동화 목록을 가져오는 API
     """
     fairy_tales_with_images = []
-
-    # uid가 0이거나 현재 로그인한 유저의 uid와 일치하는 동화를 모두 조회합니다.
-    all_tales = db.query(FairyTale).filter(or_(FairyTale.uid == 0, FairyTale.uid == uid)).all()
-
+    
+    # FairyTale 테이블에서 모든 동화를 조회
+    all_tales = db.query(FairyTale).all()
+    
     # 각 동화에 대해 이미지 정보 추가
     for tale in all_tales:
         # FairyTaleImages 테이블에서 해당 동화의 첫 번째 이미지 경로를 조회
         image = db.query(FairyTaleImages).filter(FairyTaleImages.fid == tale.fid).first()
-
+        
+        # 동화 객체와 이미지 경로를 합쳐서 결과 리스트에 추가
         fairy_tales_with_images.append({
             "fid": tale.fid,
             "uid": tale.uid,
@@ -753,6 +754,7 @@ def get_all_fairy_tales(uid: int, db: Session = Depends(get_db)):
         })
 
     return {"data": fairy_tales_with_images}
+
 
 # 폴더 내 모든 이미지를 정렬된 순서로 조회
 @app.get("/images/all")
