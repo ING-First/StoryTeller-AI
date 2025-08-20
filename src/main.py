@@ -516,7 +516,7 @@ def check_records(uid: int, db: Session = Depends(get_db)):
                 contents=ft.contents,
                 create_date=ft.createDate,
                 clips=log.clip,
-                image_url=img.image_path if img else None
+                image_url=image_url
             )
         )
 
