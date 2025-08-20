@@ -2,6 +2,7 @@ from __future__ import annotations
 from typing import List, Optional, Dict, Any, Union
 from datetime import date
 import json
+import re
 from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
@@ -33,8 +34,6 @@ def _as_pages(contents: Union[List[str], str, None]) -> List[str]:
         print(f"[DEBUG] JSON 파싱 실패: {e}")
         print("[DEBUG] 문자열을 문장 단위로 분할 시도")
         
-    # 문자열을 문장 단위로 분할 후 2문장씩 묶기
-    import re
     sentences = re.split(r'(?<=[.!?])\s+', text)
     sentences = [s.strip() for s in sentences if s.strip()]
     
