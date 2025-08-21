@@ -445,7 +445,7 @@ def read_page(uid: int, fid: int, req: ReadRequest = Body(...), db: Session = De
     v = (
             db.query(Voices)
             .filter(Voices.uid == uid)
-            .order_by(Voices.createDate.desc())
+            .order_by(Voices.vid.desc())
             .first()
         )
     # voice_id db 조회
