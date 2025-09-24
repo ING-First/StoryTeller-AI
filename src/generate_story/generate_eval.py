@@ -2,7 +2,7 @@ from __future__ import annotations
 from typing import List, Dict, Optional, Any
 from pathlib import Path
 from transformers import AutoTokenizer, AutoModelForCausalLM, GenerationConfig, pipeline
-from lora_manager import get_lora_manager, ensure_model_loaded, switch_to_lora
+from .lora_manager import get_lora_manager, ensure_model_loaded, switch_to_lora
 from peft import PeftModel
 import torch
 import re
