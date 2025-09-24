@@ -19,7 +19,7 @@ class SharedLoRAManager:
     return cls._instance
   
   def __init__(self):
-    if hasattr(self, 'initalized'):
+    if hasattr(self, 'initialized'):
       return
     
     self.device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -84,7 +84,7 @@ class SharedLoRAManager:
       return True
     
     except Exception as e:
-      print(f"[LoRAManager] 베이스 모델 로딩 완료")
+      print(f"[LoRAManager] 베이스 모델 로딩 실패")
       return False
     
   def switch_lora(self, lora_name: str, force_reload: bool = False) -> bool:
@@ -92,7 +92,6 @@ class SharedLoRAManager:
       if self.base_model is None:
           raise RuntimeError("베이스 모델이 로드되지 않았습니다. load_base_model()을 먼저 호출하세요.")
       
-      # 이미 같은 LoRA가 활성화된 경우
       if self.current_lora == lora_name and not force_reload:
           print(f"[LoRAManager] {lora_name} LoRA 이미 활성화됨")
           return True
@@ -151,7 +150,6 @@ class SharedLoRAManager:
           
       except Exception as e:
           print(f"[LoRAManager] {lora_name} LoRA 로딩 실패: {e}")
-          # 실패 시 베이스 모델로 fallback
           self.current_model = self.base_model
           self.current_lora = "base"
           return False

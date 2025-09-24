@@ -21,7 +21,7 @@ class StoryEvaluator:
     )
 
     def __init__(self):
-        self.lora_mangaer = get_lora_manager()        
+        self.lora_manager = get_lora_manager()        
         self.evaluation_criteria = self.CRITERIA
         self._ensure_model_loaded()
         
