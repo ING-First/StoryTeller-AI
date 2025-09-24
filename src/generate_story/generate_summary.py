@@ -2,7 +2,7 @@ from datetime import date
 import re
 from typing import List, Optional
 from .lora_manager import get_lora_manager, ensure_model_loaded, switch_to_lora
-
+import torch
 
 class Summarizer:
     def __init__(self):
@@ -68,7 +68,7 @@ class Summarizer:
         input_len = inputs["input_ids"].shape[1]
 
         try:
-            with self.model.no_grad():
+            with torch.no_grad():
                 outputs = self.model.generate(
                     input_ids=inputs["input_ids"],
                     max_new_tokens=max_new_tokens,
@@ -133,7 +133,7 @@ class Summarizer:
 
             input_len = inputs["input_ids"].shape[1]
 
-            with self.model.no_grad():
+            with torch.no_grad():
                 outputs = self.model.generate(
                     input_ids=inputs["input_ids"],
                     max_new_tokens=77,

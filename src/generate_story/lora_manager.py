@@ -51,41 +51,107 @@ class SharedLoRAManager:
     
   def load_base_model(self, base_model_id: str = "kimssai/sk-a.x-4.0-light-8bit") -> bool:
     if self.base_model is not None:
-      print(f"[LoRAManager] 베이스 모델 이미 로드됨: {base_model_id}")
-      return True
+        print(f"[LoRAManager] 베이스 모델 이미 로드됨: {base_model_id}")
+        return True
     
     try:
-      print(f"[LoRAManger] 베이스 모델 로딩 시작: {base_model_id}")
-      
-      self.tokenizer = AutoTokenizer.from_pretrained(
-        base_model_id,
-        trust_remote_code = True
-      )
-      
-      if self.tokenizer.pad_token is None:
-        self.tokenizer.pad_token = self.tokenizer.eos_token
-      self.tokenizer.padding_side = "left"
-      
-      self.base_model = AutoModelForCausalLM.from_pretrained(
-        base_model_id,
-        device_map='auto' if self.device == 'cuda' else None,
-        torch_dtype=self.dtype,
-        trust_remote_code=True,
-        low_cpu_mem_usage=True
-      )
-      
-      if self.device == 'cpu':
-        self.base_model.to(self.device)
+        print(f"[LoRAManager] =====베이스 모델 로딩 시작===== {base_model_id}")
         
-      self.base_model.eval()
-      self.current_model = self.base_model
-      
-      print(f"[LoRAManager] 베이스 모델 로딩 완료")
-      return True
+        # 시스템 상태 확인
+        print(f"[LoRAManager] 시스템 상태:")
+        print(f"  - Device: {self.device}")
+        print(f"  - dtype: {self.dtype}")
+        print(f"  - CUDA available: {torch.cuda.is_available()}")
+        
+        if torch.cuda.is_available():
+            print(f"  - GPU count: {torch.cuda.device_count()}")
+            print(f"  - Current device: {torch.cuda.current_device()}")
+            print(f"  - GPU name: {torch.cuda.get_device_name()}")
+            print(f"  - GPU memory allocated: {torch.cuda.memory_allocated()/1e9:.2f}GB")
+            print(f"  - GPU memory reserved: {torch.cuda.memory_reserved()/1e9:.2f}GB")
+            total_memory = torch.cuda.get_device_properties(0).total_memory / 1e9
+            print(f"  - GPU total memory: {total_memory:.2f}GB")
+        
+        # 1단계: 토크나이저 로딩
+        print(f"[LoRAManager] 1단계: 토크나이저 로딩 시작...")
+        self.tokenizer = AutoTokenizer.from_pretrained(
+            base_model_id,
+            trust_remote_code=True
+        )
+        print(f"[LoRAManager] 1단계: 토크나이저 로딩 완료")
+        
+        # 토크나이저 설정
+        if self.tokenizer.pad_token is None:
+            self.tokenizer.pad_token = self.tokenizer.eos_token
+            print(f"[LoRAManager] pad_token 설정: {self.tokenizer.pad_token}")
+        self.tokenizer.padding_side = "left"
+        print(f"[LoRAManager] padding_side 설정: left")
+        
+        # 2단계: 베이스 모델 로딩
+        print(f"[LoRAManager] 2단계: 베이스 모델 로딩 시작...")
+        print(f"[LoRAManager] 모델 로딩 옵션:")
+        print(f"  - device_map: {'auto' if self.device == 'cuda' else None}")
+        print(f"  - torch_dtype: {self.dtype}")
+        print(f"  - trust_remote_code: True")
+        print(f"  - low_cpu_mem_usage: True")
+        
+        # 메모리 체크 (CUDA인 경우)
+        if torch.cuda.is_available():
+            available_memory = total_memory - (torch.cuda.memory_allocated()/1e9)
+            print(f"[LoRAManager] 사용 가능한 GPU 메모리: {available_memory:.2f}GB")
+            if available_memory < 8.0:  # 8GB 미만이면 경고
+                print(f"[LoRAManager] WARNING: GPU 메모리 부족 가능성 ({available_memory:.2f}GB < 8GB)")
+        
+        self.base_model = AutoModelForCausalLM.from_pretrained(
+            base_model_id,
+            device_map='auto' if self.device == 'cuda' else None,
+            torch_dtype=self.dtype,
+            trust_remote_code=True,
+            low_cpu_mem_usage=True
+        )
+        print(f"[LoRAManager] 2단계: 베이스 모델 로딩 완료")
+        
+        # 3단계: 모델 설정
+        print(f"[LoRAManager] 3단계: 모델 설정 시작...")
+        if self.device == 'cpu':
+            print(f"[LoRAManager] CPU로 모델 이동 중...")
+            self.base_model.to(self.device)
+            print(f"[LoRAManager] CPU로 모델 이동 완료")
+        
+        self.base_model.eval()
+        self.current_model = self.base_model
+        print(f"[LoRAManager] 3단계: 모델 설정 완료 (eval mode)")
+        
+        # 최종 메모리 상태
+        if torch.cuda.is_available():
+            print(f"[LoRAManager] 최종 GPU 메모리 상태:")
+            print(f"  - allocated: {torch.cuda.memory_allocated()/1e9:.2f}GB")
+            print(f"  - reserved: {torch.cuda.memory_reserved()/1e9:.2f}GB")
+        
+        print(f"[LoRAManager] =====베이스 모델 로딩 성공=====")
+        return True
     
     except Exception as e:
-      print(f"[LoRAManager] 베이스 모델 로딩 실패")
-      return False
+        print(f"[LoRAManager] =====베이스 모델 로딩 실패=====")
+        print(f"[LoRAManager] 에러 타입: {type(e).__name__}")
+        print(f"[LoRAManager] 에러 메시지: {str(e)}")
+        
+        # 상세 스택 트레이스
+        import traceback
+        print(f"[LoRAManager] 상세 스택 트레이스:")
+        traceback.print_exc()
+        
+        # 현재 메모리 상태
+        if torch.cuda.is_available():
+            print(f"[LoRAManager] 에러 발생 시 GPU 메모리:")
+            print(f"  - allocated: {torch.cuda.memory_allocated()/1e9:.2f}GB")
+            print(f"  - reserved: {torch.cuda.memory_reserved()/1e9:.2f}GB")
+        
+        # 정리 작업
+        if hasattr(self, 'tokenizer') and self.tokenizer is not None:
+            print(f"[LoRAManager] 토크나이저는 로딩됨 (부분 성공)")
+        
+        return False
     
   def switch_lora(self, lora_name: str, force_reload: bool = False) -> bool:
       """LoRA 어댑터 스위칭"""
