@@ -1,5 +1,6 @@
 from fastapi import FastAPI, Depends, HTTPException, UploadFile,  Query, Path, File, Form, Body
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 import torch
 from generate_story.lora_manager import get_lora_manager, ensure_model_loaded
 from generate_story.generate_story import StoryBookGenerator
@@ -16,6 +17,9 @@ import gc
 import torch
 import logging
 import time
+import json
+import base64
+import os
 
 app = FastAPI()
 app.add_middleware(
@@ -79,8 +83,8 @@ class GenerateResponse(BaseModel):
     createDate: date
 
 # 동화 생성 API
-@app.post("/generate_story", response_model=GenerateStoryResponse)
-def generate_story(req: GenerateStoryRequest, db: Session = Depends(get_db)):
+@app.post("/generate_story")
+def generate_story(req: GenerateStoryRequest, db: Session = Depends(get_db), stream: bool = Query(False)):    
     try:
         count = 1        
         while count <= 10:
@@ -119,28 +123,55 @@ def generate_story(req: GenerateStoryRequest, db: Session = Depends(get_db)):
 
         story = db.query(FairyTale).filter(FairyTale.title == result['title']).first()
 
-        page_summaries = summarizer.generate_page_summaries(result["content"])
-        
-        for summary in page_summaries:
-            image_path, file_name = img_generator.generate_image(summary, result["title"])
-
-            images = FairyTaleImages(
-                fid=story.fid,
-                image_path=image_path,
-                file_name=file_name,
-                createDate=date.today(),
+        if stream:
+            def generate_pages():
+                for i, page_content in enumerate(result["content"]):
+                    page_summary = summarizer.generate_page_summaries([page_content])[0]
+                    image_path, file_name = img_generator.generate_image(page_summary, result["title"])
+                    
+                    # 이미지 DB 저장
+                    images = FairyTaleImages(fid=story.fid, image_path=image_path, file_name=file_name, createDate=date.today())
+                    db.add(images)
+                    db.commit()
+                    
+                    # 실제 이미지 파일 경로 구성
+                    full_image_path = os.path.join(image_path, file_name)
+                    
+                    # 이미지를 base64로 인코딩
+                    try:
+                        with open(full_image_path, "rb") as image_file:
+                            image_base64 = base64.b64encode(image_file.read()).decode('utf-8')
+                            image_data = f"data:image/png;base64,{image_base64}"
+                    except Exception as e:
+                        print(f"이미지 로딩 실패 ({full_image_path}): {e}")
+                        image_data = None
+                    
+                    page_data = {
+                        'page': i + 1, 
+                        'content': page_content, 
+                        'image': image_data,  # base64 형태로 전송
+                        'total_pages': len(result["content"]), 
+                        'title': result["title"] if i == 0 else None
+                    }
+                    yield f"data: {json.dumps(page_data, ensure_ascii=False)}\n\n"
+                
+                yield f"data: {json.dumps({'completed': True, 'fid': story.fid, 'message': '동화생성을 완료했습니다.'})}\n\n"
+                
+            return StreamingResponse(
+                generate_pages(), 
+                media_type="text/event-stream", 
+                headers={"Cache-Control": "no-cache", "Connection": "keep-alive"}
             )
-            
-            try:
+        else:
+            # 기존 방식
+            page_summaries = summarizer.generate_page_summaries(result["content"])
+            for summary_text in page_summaries:
+                image_path, file_name = img_generator.generate_image(summary_text, result["title"])
+                images = FairyTaleImages(fid=story.fid, image_path=image_path, file_name=file_name, createDate=date.today())
                 db.add(images)
                 db.commit()
-                db.refresh(images)
-            except Exception as e:
-                torch.cuda.empty_cache()
-                print("이미지 데이터 저장 실패")
+            
+            return GenerateStoryResponse(message="동화생성을 완료했습니다.", fid=story.fid)
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"동화 생성에 실패하였습니다.: {e}")
-    
-        
-    return GenerateStoryResponse(message="동화생성을 완료했습니다.", fid=story.fid)
