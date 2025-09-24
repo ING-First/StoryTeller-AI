@@ -1,6 +1,7 @@
 from fastapi import FastAPI, Depends, HTTPException, UploadFile,  Query, Path, File, Form, Body
 from fastapi.middleware.cors import CORSMiddleware
 import torch
+from generate_story.lora_manager import get_lora_manager, ensure_model_loaded
 from generate_story.generate_story import StoryBookGenerator
 from generate_story.generate_image import ImageGenerator
 from generate_story.generate_eval import StoryEvaluator
@@ -14,6 +15,7 @@ from datetime import date
 import gc
 import torch
 import logging
+import time
 
 app = FastAPI()
 app.add_middleware(
@@ -34,6 +36,12 @@ def get_db():
 # 동화생성 모델 로드
 sbg = StoryBookGenerator()
 sbg.load()
+
+# lora_manager 초기화
+lora_manager = get_lora_manager()
+while not ensure_model_loaded():
+    time.sleep(1)
+    print("베이스 모델 로딩 대기중...")
 
 # 평가 모델 로드
 story_evaluator = StoryEvaluator()
