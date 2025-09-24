@@ -35,9 +35,11 @@ def get_db():
 sbg = StoryBookGenerator()
 sbg.load()
 
+# 평가 모델 로드
+story_evaluator = StoryEvaluator()
+
 # 요약 모델 로드
 summarizer = Summarizer()
-summarizer.load_lora_model()
 
 # 스테이블 디퓨전 모델 로드
 img_generator = ImageGenerator()
@@ -75,11 +77,7 @@ def generate_story(req: GenerateStoryRequest, db: Session = Depends(get_db)):
         count = 1        
         while count <= 10:
             result = sbg.generate_story(name=req.name, age=req.age, genre=req.genre)
-            del sbg; gc.collect(); torch.cuda.empty_cache()
-            
-            eval = StoryEvaluator()
-            eval_scores = eval.evaluate_single_story_fast(result['content'], result['prompt'])['scores']
-            del eval; gc.collect(); torch.cuda.empty_cache()
+            eval_scores = story_evaluator.evaluate_single_story_fast(result['content'], result['prompt'])['scores']
             
             if all(score > 1 for score in eval_scores):
                 break
@@ -115,8 +113,6 @@ def generate_story(req: GenerateStoryRequest, db: Session = Depends(get_db)):
 
         page_summaries = summarizer.generate_page_summaries(result["content"])
         
-        del summarizer; gc.collect(); torch.cuda.empty_cache()
-        
         for summary in page_summaries:
             image_path, file_name = img_generator.generate_image(summary, result["title"])
 
@@ -134,8 +130,6 @@ def generate_story(req: GenerateStoryRequest, db: Session = Depends(get_db)):
             except Exception as e:
                 torch.cuda.empty_cache()
                 print("이미지 데이터 저장 실패")
-                
-        del img_generator; gc.collect(); torch.cuda.empty_cache()
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"동화 생성에 실패하였습니다.: {e}")
