@@ -152,7 +152,7 @@ class Summarizer:
                     summary = summary.split(stop)[0].strip()
                     break
                 
-            summary = re.sub(r"[A-Za-z0-9.,:;!?\"'()\[\]{}<>@#$%^&*+=/_\-]+", "", summary)
+            summary = re.sub(r"[A-Za-z0-9]+", "", summary)
             results.append(summary)
 
         return results

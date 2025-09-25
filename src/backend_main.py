@@ -29,7 +29,6 @@ app.add_middleware(
     allow_headers=["*"]       
 )
 
-
 sg = SoundGenerator()
 reader = StoryReader()
 
