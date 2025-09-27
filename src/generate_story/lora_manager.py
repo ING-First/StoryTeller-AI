@@ -32,6 +32,7 @@ class SharedLoRAManager:
     
     BASE_DIR = Path(__file__).resolve().parent.parent
     self.lora_paths = {
+      "story": BASE_DIR.parent / "models" / "lora_story",
       "eval": BASE_DIR.parent / "models" / "lora_eval",
       "summary": BASE_DIR.parent / "models" / "lora_summary"
     }
