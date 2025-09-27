@@ -1,10 +1,10 @@
 import os, re, time, torch
 from typing import Optional, Dict, Tuple, List
 from transformers import AutoTokenizer, AutoModelForCausalLM, GenerationConfig
+from .lora_manager import get_lora_manager, ensure_model_loaded, switch_to_lora
 
 class StoryBookGenerator:
     def __init__(self,
-                 repo_or_path: str = "kkuriyoon/QLoRA-ax4-StoryTeller",
                  hf_token: Optional[str] = None,
                  max_new_tokens: int = 280,
                  temperature: float = 0.8,
@@ -15,7 +15,9 @@ class StoryBookGenerator:
                  style_override: Optional[str] = None):
         
         # model
-        self.repo_or_path = repo_or_path
+        self.lora_manager = get_lora_manager()
+        self._ensure_model_loaded()
+        
         self.hf_token = hf_token or os.getenv("HF_TOKEN", "").strip() or None
 
         # generate
@@ -38,17 +40,21 @@ class StoryBookGenerator:
             "일상": "친구/가족/학교/동네 등 공감 포인트 중심의 소소한 사건",
             "동시": "리듬/반복/이미지를 살린 운율, 짧은 행과 명료한 메시지",
         }
+        
+    @property
+    def model(self):
+        return self.lora_manager.get_current_model()
 
-        self.tokenizer: Optional[AutoTokenizer] = None
-        self.model: Optional[AutoModelForCausalLM] = None
-
-
-    def _select_dtype_and_device_map(self):
-        if torch.cuda.is_available():
-            return torch.float16, "auto"
-        elif torch.backends.mps.is_available():
-            return torch.float16, {"": "mps"}
-        return torch.float32, {"": "cpu"}
+    @property
+    def tokenizer(self):
+        return self.lora_manager.get_tokenizer()
+        
+    def _ensure_model_loaded(self):
+        if not ensure_model_loaded():
+            raise RuntimeError("베이스 모델 로딩 실패")
+        
+        if not switch_to_lora("story"):
+            print("[StoryBookGenerator] WARNING: story LoRA 로딩 실패, 베이스 모델 사용")
 
     def _split_title_content(self, text: str) -> Tuple[str, str]:
         s = text.strip()
@@ -76,25 +82,6 @@ class StoryBookGenerator:
             if chunk:
                 chunks.append(chunk)
         return chunks
-
-
-    def load(self):
-        print("-- 모델 로딩중")
-        torch_dtype, device_map = self._select_dtype_and_device_map()
-        token_kw = {"token": self.hf_token} if self.hf_token else {}
-
-        tok = AutoTokenizer.from_pretrained(self.repo_or_path, use_fast=True, **token_kw)
-        if tok.pad_token_id is None and tok.eos_token_id is not None:
-            tok.pad_token = tok.eos_token
-
-        model = AutoModelForCausalLM.from_pretrained(
-            self.repo_or_path,
-            torch_dtype=torch_dtype,
-            device_map=device_map,
-            **token_kw
-        )
-        self.tokenizer, self.model = tok, model
-        print("-- 모델 로딩 완료")
 
     def _build_prompt(self, name: str, age: int, genre: str) -> str:
         guide = self.style_override or self.genre_guides.get(genre, "장르적 관습을 유아 친화적으로 순화하여 반영")
@@ -132,7 +119,10 @@ class StoryBookGenerator:
 
     @torch.inference_mode()
     def generate_story(self, name: str, age: int, genre: str) -> Dict[str, object]:
-        assert self.model is not None and self.tokenizer is not None, "먼저 load() 실행 필요!"
+        # story LoRA 활성화 확인
+        if self.lora_manager.get_current_lora_name() != "story":
+            switch_to_lora("story")
+        
         prompt = self._build_prompt(name, age, genre)
 
         inputs = self.tokenizer(prompt, return_tensors="pt", truncation=True, max_length=1024)
