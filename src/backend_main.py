@@ -40,9 +40,6 @@ SECRET_KEY = os.getenv("SECRET_KEY")
 ALGORITHM = os.getenv("ALGORITHM")
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES"))
 
-XI_API_KEY = os.getenv("XI_API_KEY") or os.getenv("API_KEY")
-ELEVEN_ADD_URL = "https://api.elevenlabs.io/v1/voices/add"
-
 pattern = re.compile(r'^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*()_\-+=\[\]{}\\|;:\'",.<>/?`~])[A-Za-z\d!@#$%^&*()_\-+=\[\]{}\\|;:\'",.<>/?`~]{8,15}$')
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -251,36 +248,26 @@ def login(req: LoginRequest, db: Session = Depends(get_db)):
 
 @app.post("/voices/register", response_model=VoiceRegisterResponse) 
 async def register_voice(uid: int = Form(...), audio: UploadFile = File(...), db: Session = Depends(get_db)):
-    if not XI_API_KEY:
-        raise HTTPException(status_code=500, detail="missing XI_API_KEY")
-
     try:
-        # 디스크 저장 없이 스트리밍 업로드
-        files = {"files": (audio.filename, await audio.read(), audio.content_type or "audio/mpeg")}
-        data = {"name": f"{uid} voice", "description": "동화책 TTS 커스텀 목소리"}
-        headers = {"xi-api-key": XI_API_KEY}
+        save_dir = "ref_voices"
+        os.makedirs(save_dir, exist_ok=True)
+        file_path = os.path.join(save_dir, f"user_{uid}.wav")
 
-        async with httpx.AsyncClient(timeout=60) as client:
-            r = await client.post(ELEVEN_ADD_URL, headers=headers, data=data, files=files)
-        if r.status_code != 200:
-            raise HTTPException(status_code=502, detail=f"voice_register_failed: {r.text}")
-
-        voice_id = r.json().get("voice_id")
-        if not voice_id:
-            raise HTTPException(status_code=502, detail="voice_id_missing_from_provider")
+        with open(file_path, "wb") as f:
+            f.write(await audio.read())
 
         v = Voices(
             uid=uid,
-            voice_id=voice_id,
-            memo="", 
-            voiceFile="",
+            voice_id="", 
+            memo="사용자 참조 오디오",
+            voiceFile=file_path,
             createDate=date.today()
         )
-        db.add(v); db.flush(); db.refresh(v); db.commit()
+        db.add(v)
+        db.commit()
+        db.refresh(v)
 
-        return VoiceRegisterResponse(message="사용자 음성 등록에 성공하였습니다.")
-    except HTTPException:
-        raise
+        return {"message": "사용자 음성 등록 성공", "file_path": file_path}
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"register_internal_error: {e}")
@@ -291,36 +278,34 @@ def resume_reading(uid: int, fid: int, db: Session = Depends(get_db)):
     return ResumeResponse(**result)
 
 @app.post("/users/{uid}/fairy_tales/{fid}/read")
-def read_page(uid: int, fid: int, req: ReadRequest = Body(...), db: Session = Depends(get_db)):
-    if not XI_API_KEY:
-        raise HTTPException(status_code=500, detail="missing XI_API_KEY")
-    v = (
-            db.query(Voices)
-            .filter(Voices.uid == uid)
-            .order_by(Voices.vid.desc())
-            .first()
-        )
-    # voice_id db 조회
-    voice_id = getattr(v, "voice_id", None)
-    return reader.stream_page(db, uid, fid, page=req.page, voice_id=voice_id)
+def read_page(uid: int, fid: int, page: int = Body(..., embed=True), db: Session = Depends(get_db)):
+    return reader.stream_page(db, uid, fid, page=page)
 
 @app.post("/tts/stream_page")
-def tts_stream_page(req: TTSPageFromListRequest, db: Session = Depends(get_db)):
-    if not XI_API_KEY:
-        raise HTTPException(status_code=500, detail="missing XI_API_KEY")
-    if not req.pages:
+def tts_stream_page(uid: int = Body(...), pages: list[str] = Body(...), page: int = Body(...), db: Session = Depends(get_db)):
+    if not pages:
         raise HTTPException(status_code=400, detail="pages_required")
-    if req.page < 1 or req.page > len(req.pages):
-        raise HTTPException(status_code=400, detail=f"invalid_page_number: 1..{len(req.pages)}")
+    if page < 1 or page > len(pages):
+        raise HTTPException(status_code=400, detail=f"invalid_page_number: 1..{len(pages)}")
 
-    text = (req.pages[req.page - 1] or "").strip()
+    text = (pages[page - 1] or "").strip()
     if not text:
         raise HTTPException(status_code=400, detail="empty_page_text")
 
+    v = (
+        db.query(Voices)
+        .filter(Voices.uid == uid)
+        .order_by(Voices.vid.desc())
+        .first()
+    )
+    ref_wav = getattr(v, "voiceFile", None) if v else None
+    if not ref_wav or not os.path.isfile(ref_wav):
+        raise HTTPException(status_code=400, detail="사용자 참조 오디오 없음")
+
     return StreamingResponse(
-        sg.tts_generator(voice_id=req.voice_id, text=text),
-        media_type="audio/mpeg",
-        headers={"Content-Disposition": f'inline; filename="page{req.page}.mp3"'}
+        SoundGenerator().tts_generator(ref_wav=ref_wav, text=text),
+        media_type="audio/wav",
+        headers={"Content-Disposition": f'inline; filename="page{page}.wav"'}
     )
     
 # Backend API: 나의 독서기록 조회
