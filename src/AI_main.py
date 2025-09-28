@@ -45,6 +45,7 @@ while not ensure_model_loaded():
 
 # 동화생성 모델 로드
 sbg = StoryBookGenerator()
+print(f"동화책 생성 병합 모델 사용 시: kkuriyoon/QLoRA-ax4-StoryTeller")
 
 # 평가 모델 로드
 story_evaluator = StoryEvaluator()
