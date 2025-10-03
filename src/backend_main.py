@@ -484,6 +484,18 @@ def search_books(
         record = query.filter(FairyTale.fid == fid).first()
         if not record:
             raise HTTPException(status_code=404, detail="해당 동화를 찾을 수 없음")
+        
+        log = db.query(FairyTaleLog).filter(FairyTaleLog.fid == fid, FairyTaleLog.uid == uid).first()
+        print(log)
+        if not log:
+            f = FairyTaleLog(
+                uid=uid,
+                fid=fid,
+                clip=1, 
+                createDate=date.today(),
+                updateDate=date.today()
+            )
+            db.add(f); db.flush(); db.refresh(f); db.commit()
 
         # contents 분리
         chunks = _split_into_chunks(record.contents)
