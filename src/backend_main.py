@@ -137,6 +137,7 @@ class SearchResponse(BaseModel):
 class UserUpdateRequest(BaseModel):
     uid: int
     id: str
+    name: str
     currentPasswd: str
     passwd: str
     repasswd: str
@@ -381,22 +382,24 @@ def update_user(req: UserUpdateRequest, db: Session = Depends(get_db)):
     if not user or not verify_password(req.currentPasswd, user.passwd):
         raise HTTPException(status_code=401, detail="현재 비밀번호가 일치 하지 않습니다.")
     
-    if req.passwd == "":
-        raise HTTPException(status_code=400, detail="비밀번호를 입력해주세요.")
+    if req.passwd != "":
+        if  not bool(pattern.fullmatch(req.passwd)):
+            raise HTTPException(status_code=400, detail="비밀번호에 대소문자, 특수문자, 숫자가 모두 입력됬는지 확인해주세요.")
+        
+        if req.repasswd == "":
+            raise HTTPException(status_code=400, detail="비밀번호 재입력을 입력해주세요.")
+        
+        if req.passwd != req.repasswd:
+            raise HTTPException(status_code=400, detail="비밀번호와 비밀번호 재입력이 일치하지 않습니다.")
     
-    if not bool(pattern.fullmatch(req.passwd)):
-        raise HTTPException(status_code=400, detail="비밀번호에 대소문자, 특수문자, 숫자가 모두 입력됬는지 확인해주세요.")
+    user.name = req.name
     
-    if req.repasswd == "":
-        raise HTTPException(status_code=400, detail="비밀번호 재입력을 입력해주세요.")
-    
-    if req.passwd != req.repasswd:
-        raise HTTPException(status_code=400, detail="비밀번호와 비밀번호 재입력이 일치하지 않습니다.")
-    
-    # 비밀번호 해싱
-    hashed_passwd = pwd_context.hash(req.passwd)
-    
-    user.passwd = hashed_passwd
+    if req.passwd != "":
+        # 비밀번호 해싱
+        hashed_passwd = pwd_context.hash(req.passwd)
+        
+        user.passwd = hashed_passwd
+        
     user.updateDate = date.today()
 
     try:
