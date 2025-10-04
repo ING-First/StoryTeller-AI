@@ -137,6 +137,7 @@ class SearchResponse(BaseModel):
 class UserUpdateRequest(BaseModel):
     uid: int
     id: str
+    name: str
     currentPasswd: str
     passwd: str
     repasswd: str
@@ -157,7 +158,12 @@ class UserUpdateSearchResponse(BaseModel):
     id: str
     name: str
     address: str
+class UpdateReadingProgressRequest(BaseModel):
+    page: int
 
+class UpdateReadingProgressResponse(BaseModel):
+    message: str
+    page: int
 
 # 회원가입 API
 @app.post("/join", response_model=UserResponse)
@@ -217,7 +223,7 @@ def verify_password(plain_password, hashed_password):
     return pwd_context.verify(plain_password, hashed_password)
 
 
-# JWT 토근 발행
+# JWT 토큰 발행
 def create_access_token(data: dict, expires_delta: timedelta = None):
     to_encode = data.copy()
     expire = datetime.utcnow() + (expires_delta or timedelta(minutes=15))
@@ -383,22 +389,24 @@ def update_user(req: UserUpdateRequest, db: Session = Depends(get_db)):
     if not user or not verify_password(req.currentPasswd, user.passwd):
         raise HTTPException(status_code=401, detail="현재 비밀번호가 일치 하지 않습니다.")
     
-    if req.passwd == "":
-        raise HTTPException(status_code=400, detail="비밀번호를 입력해주세요.")
+    if req.passwd != "":
+        if  not bool(pattern.fullmatch(req.passwd)):
+            raise HTTPException(status_code=400, detail="비밀번호에 대소문자, 특수문자, 숫자가 모두 입력됬는지 확인해주세요.")
+        
+        if req.repasswd == "":
+            raise HTTPException(status_code=400, detail="비밀번호 재입력을 입력해주세요.")
+        
+        if req.passwd != req.repasswd:
+            raise HTTPException(status_code=400, detail="비밀번호와 비밀번호 재입력이 일치하지 않습니다.")
     
-    if not bool(pattern.fullmatch(req.passwd)):
-        raise HTTPException(status_code=400, detail="비밀번호에 대소문자, 특수문자, 숫자가 모두 입력됬는지 확인해주세요.")
+    user.name = req.name
     
-    if req.repasswd == "":
-        raise HTTPException(status_code=400, detail="비밀번호 재입력을 입력해주세요.")
-    
-    if req.passwd != req.repasswd:
-        raise HTTPException(status_code=400, detail="비밀번호와 비밀번호 재입력이 일치하지 않습니다.")
-    
-    # 비밀번호 해싱
-    hashed_passwd = pwd_context.hash(req.passwd)
-    
-    user.passwd = hashed_passwd
+    if req.passwd != "":
+        # 비밀번호 해싱
+        hashed_passwd = pwd_context.hash(req.passwd)
+        
+        user.passwd = hashed_passwd
+        
     user.updateDate = date.today()
 
     try:
@@ -483,6 +491,18 @@ def search_books(
         record = query.filter(FairyTale.fid == fid).first()
         if not record:
             raise HTTPException(status_code=404, detail="해당 동화를 찾을 수 없음")
+        
+        log = db.query(FairyTaleLog).filter(FairyTaleLog.fid == fid, FairyTaleLog.uid == uid).first()
+        print(log)
+        if not log:
+            f = FairyTaleLog(
+                uid=uid,
+                fid=fid,
+                clip=1, 
+                createDate=date.today(),
+                updateDate=date.today()
+            )
+            db.add(f); db.flush(); db.refresh(f); db.commit()
 
         # contents 분리
         chunks = _split_into_chunks(record.contents)
@@ -630,6 +650,51 @@ def get_default_fairy_tales(db: Session = Depends(get_db)):
         })
 
     return {"data": fairy_tales_with_images}
+
+@app.post("/users/{uid}/fairy_tales/{fid}/progress", response_model=UpdateReadingProgressResponse)
+def update_reading_progress(
+    uid: int = Path(..., description="사용자 ID"),
+    fid: int = Path(..., description="동화 ID"),
+    req: UpdateReadingProgressRequest = Body(...),
+    db: Session = Depends(get_db)
+):
+    
+    # 동화책이 존재하는지 확인
+    fairy_tale = db.query(FairyTale).filter(FairyTale.fid == fid).first()
+    if not fairy_tale:
+        raise HTTPException(status_code=404, detail="동화책을 찾을 수 없습니다.")
+    
+    # 기존 로그 찾기
+    log = db.query(FairyTaleLog).filter(
+        FairyTaleLog.uid == uid,
+        FairyTaleLog.fid == fid
+    ).first()
+    
+    if log:
+        # 기존 로그 업데이트
+        log.clip = req.page
+        log.updateDate = date.today()
+    else:
+        # 새 로그 생성 (처음 읽는 동화책)
+        log = FairyTaleLog(
+            uid=uid,
+            fid=fid,
+            clip=req.page,
+            createDate=date.today(),
+            updateDate=date.today()
+        )
+        db.add(log)
+    
+    try:
+        db.commit()
+        db.refresh(log)
+        return UpdateReadingProgressResponse(
+            message="독서 진행 상황이 저장되었습니다.",
+            page=req.page
+        )
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"진행 상황 저장 실패: {e}")
 
 
 # 폴더 내 모든 이미지를 정렬된 순서로 조회

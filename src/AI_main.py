@@ -37,15 +37,15 @@ def get_db():
     finally:
         db.close()
 
-# 동화생성 모델 로드
-sbg = StoryBookGenerator()
-sbg.load()
-
 # lora_manager 초기화
 lora_manager = get_lora_manager()
 while not ensure_model_loaded():
     time.sleep(1)
     print("베이스 모델 로딩 대기중...")
+
+# 동화생성 모델 로드
+sbg = StoryBookGenerator()
+sbg.load()
 
 # 평가 모델 로드
 story_evaluator = StoryEvaluator()
