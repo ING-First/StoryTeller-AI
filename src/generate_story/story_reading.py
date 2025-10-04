@@ -1,25 +1,34 @@
 from __future__ import annotations
 from typing import List, Optional, Dict, Any, Union
 from datetime import date
-import json
+import json, os, re
 from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
-from db.db_models import FairyTale, FairyTaleLog, Voices
+from db.db_models import FairyTale, FairyTaleLog
 from generate_story.generate_sound import SoundGenerator
 
-def _as_pages(contents: Union[List[str], str, None]) -> List[str]:
+def _as_pages(contents: Union[List[str], str, bytes, None]) -> List[str]:
     print(f"[DEBUG] _as_pages 호출됨. contents 타입: {type(contents)}, 값: {contents}")
+    
+    # 페이지 단위로 분리
     if contents is None:
         print("[DEBUG] contents가 None임")
         return []
+    if isinstance(contents, bytes):
+        try:
+            contents = contents.decode("utf-8")
+        except Exception:
+            print("[DEBUG] bytes → str 변환 실패")
+            return []
+
     if isinstance(contents, list):
         result = [p.strip() for p in contents if (p or "").strip()]
         print(f"[DEBUG] list 형태로 처리됨. 결과: {result}")
         return result
     
     # TEXT에 JSON 배열 문자열로 저장된 경우
-    text = contents.strip()
+    text = str(contents).strip()
     if not text:
         print("[DEBUG] contents가 빈 문자열임")
         return []
@@ -46,7 +55,6 @@ def _as_pages(contents: Union[List[str], str, None]) -> List[str]:
         page_text = ' '.join(page_sentences)
         pages.append(page_text)
     
-    print(f"[DEBUG] 2문장씩 묶은 결과: {len(pages)}개 페이지")
     for i, page in enumerate(pages[:3]):  # 처음 3개 페이지만 로그
         print(f"[DEBUG] 페이지 {i+1}: {page[:100]}...")
     
@@ -54,7 +62,6 @@ def _as_pages(contents: Union[List[str], str, None]) -> List[str]:
 
 
 class StoryReader:
-
     def __init__(self):
         self.sg = SoundGenerator()
         print("[DEBUG] StoryReader 초기화됨")
@@ -93,38 +100,20 @@ class StoryReader:
         uid: int,
         fid: int,
         page: int,
-        voice_id: Optional[str] = None,
+        ref_wav: Optional[str] = "ref_audio.wav",
     ) -> StreamingResponse:
-        print(f"[DEBUG] stream_page 호출됨. uid: {uid}, fid: {fid}, page: {page}, voice_id: {voice_id}")
-        
         ft = self._get_fairy_tale_or_404(db, uid, fid)
-        print(f"[DEBUG] 동화 찾음. title: {ft.title}")
-        
         pages = _as_pages(ft.contents)
-        print(f"[DEBUG] 페이지 변환 완료. 총 {len(pages)}개 페이지")
-        
-        if not pages:
-            print("[DEBUG] 페이지가 비어있음")
-            raise HTTPException(status_code=400, detail="동화에 페이지가 없습니다. (pages 비어있음)")
 
-        if page < 1 or page > len(pages):
-            print(f"[DEBUG] 잘못된 페이지 번호. 요청: {page}, 범위: 1~{len(pages)}")
+        if not pages:
+            raise HTTPException(status_code=400, detail="동화에 페이지가 없습니다.")
+
+        if not isinstance(page, int) or page < 1 or page > len(pages):
             raise HTTPException(status_code=400, detail=f"잘못된 페이지 번호: 1~{len(pages)}")
 
         text = (pages[page - 1] or "").strip()
-        print(f"[DEBUG] 페이지 텍스트 (길이: {len(text)}): {text[:100]}...")
-        
         if not text:
-            print("[DEBUG] 페이지 텍스트가 비어있음")
             raise HTTPException(status_code=400, detail="선택한 페이지 내용이 비어있습니다.")
-
-        print(f"[DEBUG] voice_id 처리 전: {voice_id}")
-        vid = voice_id or self._get_user_default_voice_id(db, uid)
-        print(f"[DEBUG] 최종 voice_id: {vid}")
-        
-        if not vid:
-            print("[DEBUG] voice_id가 None임")
-            raise HTTPException(status_code=400, detail="voice_id 없음. 먼저 /voices/register를 호출하세요.")
 
         # clip 업데이트
         print(f"[DEBUG] 읽기 로그 업데이트 시작")
@@ -158,35 +147,26 @@ class StoryReader:
             db.rollback()
             raise HTTPException(status_code=500, detail=f"log_update_failed: {e}")
 
-        # ElevenLabs TTS 실시간 스트리밍
-        print(f"[DEBUG] TTS 스트리밍 시작. voice_id: {vid}, 텍스트 길이: {len(text)}")
+        # Zonos TTS 실시간 스트리밍
+        if not ref_wav or not os.path.isfile(ref_wav):  
+            raise HTTPException(status_code=400, detail=f"참조 오디오 파일 없음: {ref_wav}")
+        print(f"[DEBUG] Zonos TTS 스트리밍 시작. ref_wav={ref_wav}, 텍스트 길이={len(text)}")
         return StreamingResponse(
-            self.sg.tts_generator(voice_id=vid, text=text),
-            media_type="audio/mpeg",
+            self.sg.tts_generator(ref_wav=ref_wav, text=text),
+            media_type="audio/wav",
             headers={
-                "Content-Disposition": f'inline; filename="fid{fid}_page{page}.mp3"',
+                "Content-Disposition": f'inline; filename="fid{fid}_page{page}.wav"',
                 "X-Total-Pages": str(len(pages)),
                 "X-Current-Page": str(page),
             },
         )
 
-    def _get_user_default_voice_id(self, db: Session, uid: int) -> Optional[str]:
-        print(f"[DEBUG] _get_user_default_voice_id 호출됨. uid: {uid}")
-        v = (
-            db.query(Voices)
-            .filter(Voices.uid == uid)
-            .order_by(Voices.createDate.desc())
-            .first()
-        )
-        result = getattr(v, "voice_id", None) if v else None
-        print(f"[DEBUG] 사용자 기본 voice_id: {result}")
-        return result
 
     def _get_fairy_tale_or_404(self, db: Session, uid: int, fid: int) -> FairyTale:
         print(f"[DEBUG] _get_fairy_tale_or_404 호출됨. uid: {uid}, fid: {fid}")
         ft = (
             db.query(FairyTale)
-            .filter(FairyTale.fid == fid)
+            .filter(FairyTale.fid == fid, FairyTale.uid == uid)
             .first()
         )
         if not ft:
