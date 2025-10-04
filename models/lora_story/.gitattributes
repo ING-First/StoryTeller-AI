@@ -1,0 +1,4 @@
+*.safetensors filter=lfs diff=lfs merge=lfs -text
+*.bin filter=lfs diff=lfs merge=lfs -text
+lora_story/** filter=lfs diff=lfs merge=lfs -text
+lora_study filter=lfs diff=lfs merge=lfs -text

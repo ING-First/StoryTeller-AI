@@ -13,6 +13,8 @@ from generate_story.story_reading import StoryReader
 from passlib.context import CryptContext
 from jose import jwt, JWTError
 from dotenv import load_dotenv
+import uuid
+
 from generate_story.generate_sound import SoundGenerator
 import os
 import re
@@ -74,6 +76,7 @@ def get_current_user(
 
 class VoiceRegisterResponse(BaseModel): 
     message: str
+    voice_id: str
 
 class TTSPageFromListRequest(BaseModel):
     voice_id: str
@@ -153,6 +156,7 @@ class SearchResponse(BaseModel):
 class UserUpdateRequest(BaseModel):
     uid: int
     id: str
+    name: str
     currentPasswd: str
     passwd: str
     repasswd: str
@@ -173,7 +177,12 @@ class UserUpdateSearchResponse(BaseModel):
     id: str
     name: str
     address: str
+class UpdateReadingProgressRequest(BaseModel):
+    page: int
 
+class UpdateReadingProgressResponse(BaseModel):
+    message: str
+    page: int
 
 # 회원가입 API
 @app.post("/join", response_model=UserResponse)
@@ -233,7 +242,7 @@ def verify_password(plain_password, hashed_password):
     return pwd_context.verify(plain_password, hashed_password)
 
 
-# JWT 토근 발행
+# JWT 토큰 발행
 def create_access_token(data: dict, expires_delta: timedelta = None):
     to_encode = data.copy()
     expire = datetime.utcnow() + (expires_delta or timedelta(minutes=15))
@@ -270,15 +279,17 @@ async def register_voice(uid: int = Form(...), audio: UploadFile = File(...), db
     try:
         save_dir = "ref_voices"
         os.makedirs(save_dir, exist_ok=True)
-        file_path = os.path.join(save_dir, f"user_{uid}.wav")
+        file_path = os.path.join(save_dir, f"user_{uid}_{uuid.uuid4().hex[:8]}.wav")
 
         with open(file_path, "wb") as f:
             f.write(await audio.read())
 
+        voice_id = f"voice_{uid}_{uuid.uuid4().hex[:8]}"
+
         v = Voices(
             uid=uid,
-            voice_id="", 
-            memo="사용자 참조 오디오",
+            voice_id=voice_id, 
+            memo="",
             voiceFile=file_path,
             createDate=date.today()
         )
@@ -286,7 +297,8 @@ async def register_voice(uid: int = Form(...), audio: UploadFile = File(...), db
         db.commit()
         db.refresh(v)
 
-        return {"message": "사용자 음성 등록 성공", "file_path": file_path}
+        return {"message": "사용자 음성 등록 성공", "voice_id": voice_id} 
+    
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"register_internal_error: {e}")
@@ -297,8 +309,19 @@ def resume_reading(uid: int, fid: int, db: Session = Depends(get_db)):
     return ResumeResponse(**result)
 
 @app.post("/users/{uid}/fairy_tales/{fid}/read")
-def read_page(uid: int, fid: int, page: int = Body(..., embed=True), db: Session = Depends(get_db)):
-    return reader.stream_page(db, uid, fid, page=page)
+def read_page(uid: int, fid: int, req: ReadRequest = Body(...), db: Session = Depends(get_db)):
+    v = (
+        db.query(Voices)
+        .filter(Voices.uid == uid)
+        .order_by(Voices.vid.desc())
+        .first()
+    )
+    voice_id = req.voice_id or getattr(v, "voice_id", None) 
+
+    if not voice_id:
+        raise HTTPException(status_code=400, detail="등록된 음성이 없습니다.")
+
+    return reader.stream_page(db, uid, fid, page=req.page, voice_id=voice_id)  # 수정됨
 
 @app.post("/tts/stream_page")
 def tts_stream_page(uid: int = Body(...), pages: list[str] = Body(...), page: int = Body(...), db: Session = Depends(get_db)):
@@ -317,12 +340,12 @@ def tts_stream_page(uid: int = Body(...), pages: list[str] = Body(...), page: in
         .order_by(Voices.vid.desc())
         .first()
     )
-    ref_wav = getattr(v, "voiceFile", None) if v else None
-    if not ref_wav or not os.path.isfile(ref_wav):
-        raise HTTPException(status_code=400, detail="사용자 참조 오디오 없음")
+    voice_id = getattr(v, "voice_id", None) if v else None  
+    if not voice_id:
+        raise HTTPException(status_code=400, detail="등록된 음성이 없습니다.")
 
     return StreamingResponse(
-        SoundGenerator().tts_generator(ref_wav=ref_wav, text=text),
+        sg.tts_generator(voice_id=voice_id, text=text), 
         media_type="audio/wav",
         headers={"Content-Disposition": f'inline; filename="page{page}.wav"'}
     )
@@ -385,22 +408,24 @@ def update_user(req: UserUpdateRequest, db: Session = Depends(get_db)):
     if not user or not verify_password(req.currentPasswd, user.passwd):
         raise HTTPException(status_code=401, detail="현재 비밀번호가 일치 하지 않습니다.")
     
-    if req.passwd == "":
-        raise HTTPException(status_code=400, detail="비밀번호를 입력해주세요.")
+    if req.passwd != "":
+        if  not bool(pattern.fullmatch(req.passwd)):
+            raise HTTPException(status_code=400, detail="비밀번호에 대소문자, 특수문자, 숫자가 모두 입력됬는지 확인해주세요.")
+        
+        if req.repasswd == "":
+            raise HTTPException(status_code=400, detail="비밀번호 재입력을 입력해주세요.")
+        
+        if req.passwd != req.repasswd:
+            raise HTTPException(status_code=400, detail="비밀번호와 비밀번호 재입력이 일치하지 않습니다.")
     
-    if not bool(pattern.fullmatch(req.passwd)):
-        raise HTTPException(status_code=400, detail="비밀번호에 대소문자, 특수문자, 숫자가 모두 입력됬는지 확인해주세요.")
+    user.name = req.name
     
-    if req.repasswd == "":
-        raise HTTPException(status_code=400, detail="비밀번호 재입력을 입력해주세요.")
-    
-    if req.passwd != req.repasswd:
-        raise HTTPException(status_code=400, detail="비밀번호와 비밀번호 재입력이 일치하지 않습니다.")
-    
-    # 비밀번호 해싱
-    hashed_passwd = pwd_context.hash(req.passwd)
-    
-    user.passwd = hashed_passwd
+    if req.passwd != "":
+        # 비밀번호 해싱
+        hashed_passwd = pwd_context.hash(req.passwd)
+        
+        user.passwd = hashed_passwd
+        
     user.updateDate = date.today()
 
     try:
@@ -485,6 +510,18 @@ def search_books(
         record = query.filter(FairyTale.fid == fid).first()
         if not record:
             raise HTTPException(status_code=404, detail="해당 동화를 찾을 수 없음")
+        
+        log = db.query(FairyTaleLog).filter(FairyTaleLog.fid == fid, FairyTaleLog.uid == uid).first()
+        print(log)
+        if not log:
+            f = FairyTaleLog(
+                uid=uid,
+                fid=fid,
+                clip=1, 
+                createDate=date.today(),
+                updateDate=date.today()
+            )
+            db.add(f); db.flush(); db.refresh(f); db.commit()
 
         # contents 분리
         chunks = _split_into_chunks(record.contents)
@@ -683,8 +720,57 @@ def get_my_fairy_tales(
         })
 
     return {"data": fairy_tales_with_images}
- 
-        
+
+# 로그인 사용자용 동화 목록 조회
+@app.get("/api/fairy_tales/my")
+def get_my_fairy_tales( 
+    db : Session = Depends(get_db),
+    current_user: Users = Depends(get_current_user)
+):
+    """
+        로그인한 사용자의 동화 목록만 가져오기 
+    """
+    fairy_tales_with_images = []
+
+    tales_with_images = (
+        db.query(FairyTale, FairyTaleImages)
+        .outerjoin(FairyTaleImages, FairyTale.fid)
+        .filter(FairyTale.uid == current_user.uid)   # <--- 로그인한 사용자 동화만 필터링
+
+        .group_by(FairyTale.fid)
+        .order_by(FairyTale.fid , FairyTaleImages.image_id.asc())
+        .all()
+    )
+
+    for tale, image in tales_with_images:
+        image_data = None
+        if image and image.file_name:
+            full_image_path = f"{image.image_path}/{image.file_name}"
+            if os.path.exists(full_image_path):
+                try:
+                    with open(full_image_path, "rb") as image_file:
+                        encoded = base64.b64encode(image_file.read()).decode()
+                        if image.file_name.lower().endswith('.png'):
+                            image_data = f"data:image/png;base64,{encoded}"
+                        else:
+                            image_data = f"data:image/jpeg;base64,{encoded}"
+                except Exception as e:
+                    print(f"Error encoding image: {e}")
+                    image_data = None
+
+        fairy_tales_with_images.append({
+            "fid": tale.fid,
+            "uid": tale.uid,
+            "title": tale.title,
+            "summary": tale.summary,
+            "contents": tale.contents,
+            "createDate": tale.createDate,
+            "image": image_data,
+        })
+
+    return {"data": fairy_tales_with_images}
+
+
 # 폴더 내 모든 이미지를 정렬된 순서로 조회
 @app.get("/images/all")
 async def get_all_images(folder_path: str):

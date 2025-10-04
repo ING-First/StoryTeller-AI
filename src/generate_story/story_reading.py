@@ -10,6 +10,8 @@ from generate_story.generate_sound import SoundGenerator
 
 def _as_pages(contents: Union[List[str], str, bytes, None]) -> List[str]:
     print(f"[DEBUG] _as_pages 호출됨. contents 타입: {type(contents)}, 값: {contents}")
+    
+    # 페이지 단위로 분리
     if contents is None:
         print("[DEBUG] contents가 None임")
         return []
@@ -53,7 +55,6 @@ def _as_pages(contents: Union[List[str], str, bytes, None]) -> List[str]:
         page_text = ' '.join(page_sentences)
         pages.append(page_text)
     
-    print(f"[DEBUG] 2문장씩 묶은 결과: {len(pages)}개 페이지")
     for i, page in enumerate(pages[:3]):  # 처음 3개 페이지만 로그
         print(f"[DEBUG] 페이지 {i+1}: {page[:100]}...")
     
@@ -65,13 +66,13 @@ class StoryReader:
         self.sg = SoundGenerator()
         print("[DEBUG] StoryReader 초기화됨")
 
-    # 이어듣기 상태 조회
     def resume_reading(self, db: Session, uid: int, fid: int) -> Dict[str, Any]:
         print(f"[DEBUG] resume_reading 호출됨. uid: {uid}, fid: {fid}")
         ft = self._get_fairy_tale_or_404(db, uid, fid)
         pages = _as_pages(ft.contents)
         total_pages = len(pages)
-        print(f"[DEBUG] 총 페이지 수: {total_pages}")
+        total_clips = (total_pages + 1) // 2  # 전체 Clip 수 계산
+        print(f"[DEBUG] 총 페이지 수: {total_pages}, 총 Clip 수: {total_clips}")
 
         log = (
             db.query(FairyTaleLog)
@@ -79,16 +80,17 @@ class StoryReader:
             .order_by(FairyTaleLog.updateDate.desc(), FairyTaleLog.lid.desc())
             .first()
         )
-        last_page = int(getattr(log, "clip", 0) or 0) if log else 0  # clip=책갈피
-        next_page = min(last_page + 1, total_pages) if total_pages > 0 else 0
-        print(f"[DEBUG] 마지막 페이지: {last_page}, 다음 페이지: {next_page}")
+        last_clip = int(getattr(log, "clip", 0) or 0) if log else 0
+        # 마지막으로 읽은 Clip을 반환
+        resume_clip = last_clip if last_clip > 0 else 1
+        print(f"[DEBUG] 마지막 Clip: {last_clip}, 이어읽기 Clip: {resume_clip}")
 
         return {
             "uid": uid,
             "fid": fid,
             "total_pages": total_pages,
-            "last_page": last_page,
-            "next_page": next_page,
+            "last_page": last_clip,
+            "next_page": resume_clip,  # 마지막으로 읽은 Clip 반환
         }
 
     # 특정 페이지 읽기
@@ -122,17 +124,20 @@ class StoryReader:
             .first()
         )
         try:
+            # page를 clip으로 변환 (페이지 1-2 = Clip 1, 페이지 3-4 = Clip 2)
+            clip_number = (page + 1) // 2
+            
             if not log:
-                print("[DEBUG] 새 로그 생성")
+                print(f"[DEBUG] 새 로그 생성. page: {page}, clip: {clip_number}")
                 log = FairyTaleLog(
-                    uid=uid, fid=fid, clip=page,
+                    uid=uid, fid=fid, clip=clip_number,
                     createDate=date.today(), updateDate=date.today()
                 )
                 db.add(log); db.flush(); db.refresh(log)
             else:
                 old_clip = int(getattr(log, "clip", 0) or 0)
-                new_clip = max(old_clip, page)
-                print(f"[DEBUG] 로그 업데이트. 이전 clip: {old_clip}, 새 clip: {new_clip}")
+                new_clip = max(old_clip, clip_number)
+                print(f"[DEBUG] 로그 업데이트. page: {page}, 이전 clip: {old_clip}, 새 clip: {new_clip}")
                 log.clip = new_clip
                 log.updateDate = date.today()
             db.commit()
