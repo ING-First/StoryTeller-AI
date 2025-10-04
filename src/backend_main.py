@@ -686,56 +686,12 @@ def get_my_fairy_tales(
     tales_with_images = (
         db.query(FairyTale, FairyTaleImages)
         .outerjoin(FairyTaleImages, FairyTale.fid)
-        .filter(FairyTale.uid == current_user.uid)   # <--- 로그인한 사용자 동화만 필터링
-
-        .group_by(FairyTale.fid)
-        .order_by(FairyTale.fid , FairyTaleImages.image_id.asc())
-        .all()
-    )
-
-    for tale, image in tales_with_images:
-        image_data = None
-        if image and image.file_name:
-            full_image_path = f"{image.image_path}/{image.file_name}"
-            if os.path.exists(full_image_path):
-                try:
-                    with open(full_image_path, "rb") as image_file:
-                        encoded = base64.b64encode(image_file.read()).decode()
-                        if image.file_name.lower().endswith('.png'):
-                            image_data = f"data:image/png;base64,{encoded}"
-                        else:
-                            image_data = f"data:image/jpeg;base64,{encoded}"
-                except Exception as e:
-                    print(f"Error encoding image: {e}")
-                    image_data = None
-
-        fairy_tales_with_images.append({
-            "fid": tale.fid,
-            "uid": tale.uid,
-            "title": tale.title,
-            "summary": tale.summary,
-            "contents": tale.contents,
-            "createDate": tale.createDate,
-            "image": image_data,
-        })
-
-    return {"data": fairy_tales_with_images}
-
-# 로그인 사용자용 동화 목록 조회
-@app.get("/api/fairy_tales/my")
-def get_my_fairy_tales( 
-    db : Session = Depends(get_db),
-    current_user: Users = Depends(get_current_user)
-):
-    """
-        로그인한 사용자의 동화 목록만 가져오기 
-    """
-    fairy_tales_with_images = []
-
-    tales_with_images = (
-        db.query(FairyTale, FairyTaleImages)
-        .outerjoin(FairyTaleImages, FairyTale.fid)
-        .filter(FairyTale.uid == current_user.uid)   # <--- 로그인한 사용자 동화만 필터링
+        .filter(
+            or_(
+                FairyTale.uid == current_user.uid,
+                FairyTale.uid == 0
+            )
+        )
 
         .group_by(FairyTale.fid)
         .order_by(FairyTale.fid , FairyTaleImages.image_id.asc())
