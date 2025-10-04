@@ -13,6 +13,8 @@ from generate_story.story_reading import StoryReader
 from passlib.context import CryptContext
 from jose import jwt
 from dotenv import load_dotenv
+import uuid
+
 from generate_story.generate_sound import SoundGenerator
 import os
 import re
@@ -55,6 +57,7 @@ def get_db():
 
 class VoiceRegisterResponse(BaseModel): 
     message: str
+    voice_id: str
 
 class TTSPageFromListRequest(BaseModel):
     voice_id: str
@@ -251,15 +254,17 @@ async def register_voice(uid: int = Form(...), audio: UploadFile = File(...), db
     try:
         save_dir = "ref_voices"
         os.makedirs(save_dir, exist_ok=True)
-        file_path = os.path.join(save_dir, f"user_{uid}.wav")
+        file_path = os.path.join(save_dir, f"user_{uid}_{uuid.uuid4().hex[:8]}.wav")
 
         with open(file_path, "wb") as f:
             f.write(await audio.read())
 
+        voice_id = f"voice_{uid}_{uuid.uuid4().hex[:8]}"
+
         v = Voices(
             uid=uid,
-            voice_id="", 
-            memo="사용자 참조 오디오",
+            voice_id=voice_id, 
+            memo="",
             voiceFile=file_path,
             createDate=date.today()
         )
@@ -267,7 +272,8 @@ async def register_voice(uid: int = Form(...), audio: UploadFile = File(...), db
         db.commit()
         db.refresh(v)
 
-        return {"message": "사용자 음성 등록 성공", "file_path": file_path}
+        return {"message": "사용자 음성 등록 성공", "voice_id": voice_id} 
+    
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"register_internal_error: {e}")
@@ -278,8 +284,19 @@ def resume_reading(uid: int, fid: int, db: Session = Depends(get_db)):
     return ResumeResponse(**result)
 
 @app.post("/users/{uid}/fairy_tales/{fid}/read")
-def read_page(uid: int, fid: int, page: int = Body(..., embed=True), db: Session = Depends(get_db)):
-    return reader.stream_page(db, uid, fid, page=page)
+def read_page(uid: int, fid: int, req: ReadRequest = Body(...), db: Session = Depends(get_db)):
+    v = (
+        db.query(Voices)
+        .filter(Voices.uid == uid)
+        .order_by(Voices.vid.desc())
+        .first()
+    )
+    voice_id = req.voice_id or getattr(v, "voice_id", None) 
+
+    if not voice_id:
+        raise HTTPException(status_code=400, detail="등록된 음성이 없습니다.")
+
+    return reader.stream_page(db, uid, fid, page=req.page, voice_id=voice_id)  # 수정됨
 
 @app.post("/tts/stream_page")
 def tts_stream_page(uid: int = Body(...), pages: list[str] = Body(...), page: int = Body(...), db: Session = Depends(get_db)):
@@ -298,12 +315,12 @@ def tts_stream_page(uid: int = Body(...), pages: list[str] = Body(...), page: in
         .order_by(Voices.vid.desc())
         .first()
     )
-    ref_wav = getattr(v, "voiceFile", None) if v else None
-    if not ref_wav or not os.path.isfile(ref_wav):
-        raise HTTPException(status_code=400, detail="사용자 참조 오디오 없음")
+    voice_id = getattr(v, "voice_id", None) if v else None  
+    if not voice_id:
+        raise HTTPException(status_code=400, detail="등록된 음성이 없습니다.")
 
     return StreamingResponse(
-        SoundGenerator().tts_generator(ref_wav=ref_wav, text=text),
+        sg.tts_generator(voice_id=voice_id, text=text), 
         media_type="audio/wav",
         headers={"Content-Disposition": f'inline; filename="page{page}.wav"'}
     )

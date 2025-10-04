@@ -10,6 +10,8 @@ from generate_story.generate_sound import SoundGenerator
 
 def _as_pages(contents: Union[List[str], str, bytes, None]) -> List[str]:
     print(f"[DEBUG] _as_pages 호출됨. contents 타입: {type(contents)}, 값: {contents}")
+    
+    # 페이지 단위로 분리
     if contents is None:
         print("[DEBUG] contents가 None임")
         return []
@@ -53,7 +55,6 @@ def _as_pages(contents: Union[List[str], str, bytes, None]) -> List[str]:
         page_text = ' '.join(page_sentences)
         pages.append(page_text)
     
-    print(f"[DEBUG] 2문장씩 묶은 결과: {len(pages)}개 페이지")
     for i, page in enumerate(pages[:3]):  # 처음 3개 페이지만 로그
         print(f"[DEBUG] 페이지 {i+1}: {page[:100]}...")
     
@@ -71,7 +72,6 @@ class StoryReader:
         ft = self._get_fairy_tale_or_404(db, uid, fid)
         pages = _as_pages(ft.contents)
         total_pages = len(pages)
-        print(f"[DEBUG] 총 페이지 수: {total_pages}")
 
         log = (
             db.query(FairyTaleLog)

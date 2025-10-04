@@ -12,10 +12,8 @@ class SoundGenerator:
         self.model = Zonos.from_pretrained("Zyphra/Zonos-v0.1-transformer", device=device)
         print("[DEBUG] Zonos 모델 로드 완료")
 
+    # TTS 오디오 스트리밍
     def tts_generator(self, ref_wav: str, text: str):
-        """
-        텍스트와 참조 음성을 이용해 TTS 오디오 스트리밍
-        """
         print(f"[DEBUG] tts_generator 호출됨. ref_wav={ref_wav}, text={text[:50]}...")
 
         # 화자 임베딩
