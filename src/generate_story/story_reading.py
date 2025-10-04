@@ -166,7 +166,7 @@ class StoryReader:
         print(f"[DEBUG] _get_fairy_tale_or_404 호출됨. uid: {uid}, fid: {fid}")
         ft = (
             db.query(FairyTale)
-            .filter(FairyTale.fid == fid, FairyTale.uid == uid)
+            .filter(FairyTale.fid == fid)
             .first()
         )
         if not ft:
