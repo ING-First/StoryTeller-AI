@@ -62,14 +62,18 @@ def get_current_user(
 
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        print("Decoded payload:", payload) 
+
         uid: int = int(payload.get("sub"))
+
         if uid is None:
             raise HTTPException(status_code=401, detail="Invalid authentication credentials")
     except JWTError:
         raise HTTPException(status_code=401, detail="=Token decode error")
     
-    user = db.query(Users),filter(Users.uid == uid).first()
+    user = db.query(Users).filter(Users.uid == uid).first()
+
+
+
     if user is None:
         raise HTTPException(status_code=404, detail="User not found")
     return user
@@ -212,7 +216,7 @@ def join(req: UserRequest, db: Session = Depends(get_db)):
     existing = db.query(Users).filter(Users.id == req.id).first()
     if existing:
         raise HTTPException(status_code=400, detail="이미 존재하는 아이디입니다.")
-    
+    print(repr(req.passwd))
     # 비밀번호 해싱
     hashed_passwd = pwd_context.hash(req.passwd)
 
@@ -246,7 +250,16 @@ def verify_password(plain_password, hashed_password):
 def create_access_token(data: dict, expires_delta: timedelta = None):
     to_encode = data.copy()
     expire = datetime.utcnow() + (expires_delta or timedelta(minutes=15))
-    to_encode.update({"exp": expire})
+    # to_encode.update({"exp": expire})
+    uid = data.get("uid")
+    if uid is None:
+        raise ValueError("토큰 생성 시 uid가 누락되었습니다.")
+
+    to_encode.update({
+        "exp": expire,
+        "sub": str(uid)
+    })
+
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
 
@@ -264,7 +277,7 @@ def login(req: LoginRequest, db: Session = Depends(get_db)):
         raise HTTPException(status_code=401, detail="아이디 또는 비밀번호가 잘못되었습니다.")
     
     access_token = create_access_token(
-        data={"sub": user.uid},
+        data={"uid": user.uid},
         expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     )
 
@@ -679,6 +692,9 @@ def get_my_fairy_tales(
     db : Session = Depends(get_db),
     current_user: Users = Depends(get_current_user)
 ):
+
+    # print("현재 로그인된 사용자 UID:", current_user.uid)
+
     """
         로그인한 사용자의 동화 목록만 가져오기 
     """
@@ -686,18 +702,18 @@ def get_my_fairy_tales(
 
     tales_with_images = (
         db.query(FairyTale, FairyTaleImages)
-        .outerjoin(FairyTaleImages, FairyTale.fid)
+        .outerjoin(FairyTaleImages, FairyTale.fid == FairyTaleImages.fid)
         .filter(
             or_(
                 FairyTale.uid == current_user.uid,
                 FairyTale.uid == 0
             )
         )
-
-        .group_by(FairyTale.fid)
-        .order_by(FairyTale.fid , FairyTaleImages.image_id.asc())
+        .group_by(FairyTale.fid, FairyTaleImages.image_id)
+        .order_by(FairyTale.fid, FairyTaleImages.image_id.asc())
         .all()
     )
+
 
     for tale, image in tales_with_images:
         image_data = None
