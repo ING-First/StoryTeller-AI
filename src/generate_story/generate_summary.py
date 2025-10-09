@@ -153,7 +153,7 @@ class Summarizer:
                     summary = summary.split(stop)[0].strip()
                     break
                 
-            # 한글, 마침표, 공백만 유지 (영문/숫자/기타 특수문자 제거)
+            # 한글, 마침표, 공백만 유지
             summary = re.sub(r"[^가-힣\s.]+", "", summary)
             results.append(summary)
 
