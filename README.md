@@ -51,7 +51,7 @@ Apache 2.0 라이선스의 전문은 [여기에서 확인할 수 있습니다](h
 
 또한 본 프로젝트는 아래의 AI 모델을 포함하고 있습니다:
 
-> - **Bingsu/my-korean-stable-diffusion-v1-5**  
+> - **Bingsu/my-korean-stable-diffusion-v1-5 모델을 파인튜닝 하여 재배포됩니다**  
 >   이 모델은 **CreativeML OpenRAIL-M 라이선스**에 따라 배포되며,  
 >   사용자에게 윤리적·법적 사용 조건을 부과합니다.  
 >   (예: 불법적, 유해한, 차별적 콘텐츠 생성 금지 등)
