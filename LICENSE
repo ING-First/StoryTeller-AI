@@ -203,6 +203,6 @@
 ---
 NOTICE:
 This project includes the model "Bingsu/my-korean-stable-diffusion-v1-5",
-which is licensed under the CreativeML OpenRAIL-M license.
-Users must comply with its ethical use conditions.
-(https://huggingface.co/spaces/CompVis/stable-diffusion-license)
+licensed under the CreativeML OpenRAIL-M license (https://huggingface.co/spaces/CompVis/stable-diffusion-license).
+Users must comply with its ethical use conditions and must not use this model to generate illegal, harmful, or NSFW content.
+This model is based on the original model by Bingsu and has been fine-tuned specifically for generating fairy tale images.
