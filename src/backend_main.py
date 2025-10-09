@@ -62,21 +62,24 @@ def get_current_user(
 
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        print("🔓 Decoded JWT payload:", payload)
 
         uid: int = int(payload.get("sub"))
+        print("✅ Extracted UID from token:", uid)
+        user = db.query(Users).filter(Users.uid == uid).first()
+        print("👤 Fetched user from DB:", user)
 
+        if user is None:
+            raise HTTPException(status_code=404, detail="User not found")
+        
         if uid is None:
             raise HTTPException(status_code=401, detail="Invalid authentication credentials")
+        return user
+    
     except JWTError:
         raise HTTPException(status_code=401, detail="=Token decode error")
     
-    user = db.query(Users).filter(Users.uid == uid).first()
 
-
-
-    if user is None:
-        raise HTTPException(status_code=404, detail="User not found")
-    return user
 
 class VoiceRegisterResponse(BaseModel): 
     message: str
@@ -642,91 +645,33 @@ def get_default_fairy_tales(db: Session = Depends(get_db)):
     DB에 저장된 모든 동화 목록을 가져오는 API (중복 제거)
     """
     fairy_tales_with_images = []
-
-    # FairyTale과 FairyTaleImages를 조인해서 각 동화별 첫 번째 이미지만 가져오기
-    tales_with_images = (
-        db.query(
-            FairyTale,
-            FairyTaleImages
-        )
-        .outerjoin(FairyTaleImages, FairyTale.fid == FairyTaleImages.fid)
-        .filter(FairyTale.uid == 0)  # uid가 0인 동화만 (기본 동화)
-        
-        .group_by(FairyTale.fid)  # fid 기준으로 그룹화 (중복 제거)
-        .order_by(FairyTale.fid, FairyTaleImages.image_id.asc())
+    
+    # 1. 기본 동화 목록만 가져오기
+    tales = (
+        db.query(FairyTale)
+        .filter(FairyTale.uid == 0)
+        .order_by(FairyTale.fid.asc())
         .all()
     )
 
-
-    for tale, image in tales_with_images:
+    # 2. 각 동화에 대해 첫 번째 이미지만 가져오기
+    for tale in tales:
         image_data = None
+        image = (
+            db.query(FairyTaleImages)
+            .filter(FairyTaleImages.fid == tale.fid)
+            .order_by(FairyTaleImages.image_id.asc())  # 대표 이미지 기준
+            .first()
+        )
+
         if image and image.file_name:
             full_image_path = f"{image.image_path}/{image.file_name}"
             if os.path.exists(full_image_path):
                 try:
                     with open(full_image_path, "rb") as image_file:
                         encoded = base64.b64encode(image_file.read()).decode()
-                        if image.file_name.lower().endswith('.png'):
-                            image_data = f"data:image/png;base64,{encoded}"
-                        else:
-                            image_data = f"data:image/jpeg;base64,{encoded}"
-                except Exception as e:
-                    print(f"Error encoding image: {e}")
-                    image_data = None
-
-        fairy_tales_with_images.append({
-            "fid": tale.fid,
-            "uid": tale.uid,
-            "title": tale.title,
-            "summary": tale.summary,
-            "contents": tale.contents,
-            "createDate": tale.createDate,
-            "image": image_data,  # base64 인코딩된 이미지
-        })
-
-    return {"data": fairy_tales_with_images}
-
-# 로그인 사용자용 동화 목록 조회
-@app.get("/api/fairy_tales/my")
-def get_my_fairy_tales( 
-    db : Session = Depends(get_db),
-    current_user: Users = Depends(get_current_user)
-):
-
-    # print("현재 로그인된 사용자 UID:", current_user.uid)
-
-    """
-        로그인한 사용자의 동화 목록만 가져오기 
-    """
-    fairy_tales_with_images = []
-
-    tales_with_images = (
-        db.query(FairyTale, FairyTaleImages)
-        .outerjoin(FairyTaleImages, FairyTale.fid == FairyTaleImages.fid)
-        .filter(
-            or_(
-                FairyTale.uid == current_user.uid,
-                FairyTale.uid == 0
-            )
-        )
-        .group_by(FairyTale.fid, FairyTaleImages.image_id)
-        .order_by(FairyTale.fid, FairyTaleImages.image_id.asc())
-        .all()
-    )
-
-
-    for tale, image in tales_with_images:
-        image_data = None
-        if image and image.file_name:
-            full_image_path = f"{image.image_path}/{image.file_name}"
-            if os.path.exists(full_image_path):
-                try:
-                    with open(full_image_path, "rb") as image_file:
-                        encoded = base64.b64encode(image_file.read()).decode()
-                        if image.file_name.lower().endswith('.png'):
-                            image_data = f"data:image/png;base64,{encoded}"
-                        else:
-                            image_data = f"data:image/jpeg;base64,{encoded}"
+                        ext = image.file_name.lower().split('.')[-1]
+                        image_data = f"data:image/{ext};base64,{encoded}"
                 except Exception as e:
                     print(f"Error encoding image: {e}")
                     image_data = None
@@ -742,6 +687,68 @@ def get_my_fairy_tales(
         })
 
     return {"data": fairy_tales_with_images}
+
+
+# 로그인 사용자용 동화 목록 조회
+@app.get("/api/fairy_tales/my")
+def get_my_fairy_tales( 
+    db : Session = Depends(get_db),
+    current_user: Users = Depends(get_current_user)
+):
+
+    # print("현재 로그인된 사용자 UID:", current_user.uid)
+
+    """
+        로그인한 사용자의 동화 목록만 가져오기 
+    """
+    fairy_tales_with_images = []
+    
+    # 1. 중복 없이 동화 목록만 가져오기
+    tales = (
+        db.query(FairyTale)
+        .filter(
+            or_(
+                FairyTale.uid == current_user.uid,
+                FairyTale.uid == 0
+            )
+        )
+        .order_by(FairyTale.fid.asc())
+        .all()
+    )
+    # 2. 각 동화에 대해 대표 이미지 하나만 가져오기
+    for tale in tales:
+        image_data = None
+        image = (
+            db.query(FairyTaleImages)
+            .filter(FairyTaleImages.fid == tale.fid)
+            .order_by(FairyTaleImages.image_id.asc())  # 첫 번째 이미지
+            .first()
+        )
+
+        if image and image.file_name:
+            full_image_path = f"{image.image_path}/{image.file_name}"
+            if os.path.exists(full_image_path):
+                try:
+                    with open(full_image_path, "rb") as image_file:
+                        encoded = base64.b64encode(image_file.read()).decode()
+                        ext = image.file_name.lower().split('.')[-1]
+                        image_data = f"data:image/{ext};base64,{encoded}"
+                except Exception as e:
+                    print(f"Error encoding image: {e}")
+                    image_data = None
+
+        fairy_tales_with_images.append({
+            "fid": tale.fid,
+            "uid": tale.uid,
+            "title": tale.title,
+            "summary": tale.summary,
+            "contents": tale.contents,
+            "createDate": tale.createDate,
+            "image": image_data,
+        })
+
+    return {"data": fairy_tales_with_images}
+
 
 @app.post("/users/{uid}/fairy_tales/{fid}/progress", response_model=UpdateReadingProgressResponse)
 def update_reading_progress(
