@@ -1,30 +1,24 @@
-from typing import Union, Optional, List
-from fastapi.security import OAuth2PasswordBearer, HTTPBearer, HTTPAuthorizationCredentials
+from typing import Optional, List
+from fastapi.security import OAuth2PasswordBearer, HTTPBearer
 from fastapi import FastAPI, Depends, HTTPException, UploadFile,  Query, Path, File, Form, Body
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from sqlalchemy import text, or_
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 from db.db_connector import SessionLocal
 from db.db_models import Users, FairyTale, FairyTaleLog, Voices, FairyTaleImages
-from generate_story.generate_summary import Summarizer
 from datetime import date, datetime, timedelta
-from passlib.context import CryptContext
-from jose import jwt
-from dotenv import load_dotenv
-from generate_story.generate_story import StoryBookGenerator
-from generate_story.generate_sound import SoundGenerator
-from generate_story.generate_image import ImageGenerator
 from generate_story.story_reading import StoryReader
-from generate_story.generate_eval import StoryEvaluator
+from passlib.context import CryptContext
+from jose import jwt, JWTError
+from dotenv import load_dotenv
+import uuid
+
+from generate_story.generate_sound import SoundGenerator
 import os
-import requests
 import re
 import httpx
-import gc
-import torch
-import logging
 import base64
 import glob
 
@@ -37,7 +31,6 @@ app.add_middleware(
     allow_headers=["*"]       
 )
 
-
 sg = SoundGenerator()
 reader = StoryReader()
 
@@ -48,9 +41,6 @@ security = HTTPBearer()
 SECRET_KEY = os.getenv("SECRET_KEY")
 ALGORITHM = os.getenv("ALGORITHM")
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES"))
-
-XI_API_KEY = os.getenv("XI_API_KEY") or os.getenv("API_KEY")
-ELEVEN_ADD_URL = "https://api.elevenlabs.io/v1/voices/add"
 
 pattern = re.compile(r'^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*()_\-+=\[\]{}\\|;:\'",.<>/?`~])[A-Za-z\d!@#$%^&*()_\-+=\[\]{}\\|;:\'",.<>/?`~]{8,15}$')
 
@@ -65,42 +55,40 @@ def get_db():
     finally:
         db.close()
 
+def get_current_user(
+        token: str = Depends(oauth2_scheme),
+        db : Session = Depends(get_db)
+    ) -> Users:
+
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        print("🔓 Decoded JWT payload:", payload)
+
+        uid: int = int(payload.get("sub"))
+        print("✅ Extracted UID from token:", uid)
+        user = db.query(Users).filter(Users.uid == uid).first()
+        print("👤 Fetched user from DB:", user)
+
+        if user is None:
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        if uid is None:
+            raise HTTPException(status_code=401, detail="Invalid authentication credentials")
+        return user
+    
+    except JWTError:
+        raise HTTPException(status_code=401, detail="=Token decode error")
+    
+
+
 class VoiceRegisterResponse(BaseModel): 
     message: str
-
-# class TTSInlineRequest(BaseModel):
-#     voice_id: str
-#     text: str
+    voice_id: str
 
 class TTSPageFromListRequest(BaseModel):
     voice_id: str
     pages: List[str]
     page: int
-
-class GenerateStoryRequest(BaseModel):
-    uid: int
-    type: int
-    name: str
-    age: int
-    genre: str
-
-class GenerateStoryResponse(BaseModel):
-    message: str
-    fid: int
-        
-class GenerateRequest(BaseModel):
-    uid: int
-    type: int
-    title: str
-    contents: str
-    
-class GenerateResponse(BaseModel):
-    uid: int
-    type: int
-    title: str
-    summary: str
-    contents: str
-    createDate: date
 
 class UserRequest(BaseModel):
     id: str
@@ -131,6 +119,17 @@ class RecordCheckItem(BaseModel):
     create_date: date
     clips: int
     image_url: str | None
+
+class ReadRequest(BaseModel): 
+    page: int
+    voice_id: Optional[str] = None
+
+class ResumeResponse(BaseModel):  
+    uid: int
+    fid: int
+    total_pages: int
+    last_page: int
+    next_page: int
 
 class RecordCheckResponse(BaseModel):
     uid: int
@@ -164,6 +163,7 @@ class SearchResponse(BaseModel):
 class UserUpdateRequest(BaseModel):
     uid: int
     id: str
+    name: str
     currentPasswd: str
     passwd: str
     repasswd: str
@@ -184,18 +184,12 @@ class UserUpdateSearchResponse(BaseModel):
     id: str
     name: str
     address: str
-
-class ReadRequest(BaseModel): 
+class UpdateReadingProgressRequest(BaseModel):
     page: int
-    voice_id: Optional[str] = None
 
-class ResumeResponse(BaseModel):  
-    uid: int
-    fid: int
-    total_pages: int
-    last_page: int
-    next_page: int
-
+class UpdateReadingProgressResponse(BaseModel):
+    message: str
+    page: int
 
 # 회원가입 API
 @app.post("/join", response_model=UserResponse)
@@ -225,7 +219,7 @@ def join(req: UserRequest, db: Session = Depends(get_db)):
     existing = db.query(Users).filter(Users.id == req.id).first()
     if existing:
         raise HTTPException(status_code=400, detail="이미 존재하는 아이디입니다.")
-    
+    print(repr(req.passwd))
     # 비밀번호 해싱
     hashed_passwd = pwd_context.hash(req.passwd)
 
@@ -255,11 +249,20 @@ def verify_password(plain_password, hashed_password):
     return pwd_context.verify(plain_password, hashed_password)
 
 
-# JWT 토근 발행
+# JWT 토큰 발행
 def create_access_token(data: dict, expires_delta: timedelta = None):
     to_encode = data.copy()
     expire = datetime.utcnow() + (expires_delta or timedelta(minutes=15))
-    to_encode.update({"exp": expire})
+    # to_encode.update({"exp": expire})
+    uid = data.get("uid")
+    if uid is None:
+        raise ValueError("토큰 생성 시 uid가 누락되었습니다.")
+
+    to_encode.update({
+        "exp": expire,
+        "sub": str(uid)
+    })
+
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
 
@@ -277,7 +280,7 @@ def login(req: LoginRequest, db: Session = Depends(get_db)):
         raise HTTPException(status_code=401, detail="아이디 또는 비밀번호가 잘못되었습니다.")
     
     access_token = create_access_token(
-        data={"sub": user.uid},
+        data={"uid": user.uid},
         expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     )
 
@@ -287,148 +290,31 @@ def login(req: LoginRequest, db: Session = Depends(get_db)):
         access_token=access_token, 
         token_type="bearer")
 
-# 동화 생성 API
-@app.post("/generate", response_model=GenerateStoryResponse)
-def generate(req: GenerateStoryRequest, db: Session = Depends(get_db)):
-    try:
-        count = 1        
-        while count <= 10:
-            sbg = StoryBookGenerator()
-            sbg.load()
-            result = sbg.generate_story(name=req.name, age=req.age, genre=req.genre)
-            del sbg; gc.collect(); torch.cuda.empty_cache()
-            
-            eval = StoryEvaluator()
-            eval_scores = eval.evaluate_single_story_fast(result['content'], result['prompt'])['scores']
-            del eval; gc.collect(); torch.cuda.empty_cache()
-            
-            if all(score > 1 for score in eval_scores):
-                break
-            
-            count += 1
-
-        if count > 10:
-            raise HTTPException(
-            status_code=400,
-            detail="10번 시도하였으나 유효한 동화를 생성하지 못했습니다."
-        )        
-        
-        summarizer = Summarizer()
-        summarizer.load_lora_model()
-        summary = summarizer.generate_summary(uid=req.uid, type=req.type, title=result['title'], contents=result["content"], max_new_tokens=200)["summary"]
-
-        ft = FairyTale(
-            uid=req.uid,
-            type=2,
-            title=result["title"],
-            summary=summary,
-            contents=' '.join(result["content"]).strip(),
-            createDate=date.today(),
-        )
-
-        try:
-            db.add(ft)
-            db.commit()
-            db.refresh(ft)
-        except Exception as e:
-            db.rollback()
-            logging.error(f"Database error: {str(e)}", exc_info=True)
-
-        story = db.query(FairyTale).filter(FairyTale.title == result['title']).first()
-
-        page_summaries = summarizer.generate_page_summaries(result["content"])
-        
-        del summarizer; gc.collect(); torch.cuda.empty_cache()
-        
-        img_generator = ImageGenerator()
-        img_generator.load_diffusion_model()
-        
-        for summary in page_summaries:
-            image_path, file_name = img_generator.generate_image(summary, result["title"])
-
-            images = FairyTaleImages(
-                fid=story.fid,
-                image_path=image_path,
-                file_name=file_name,
-                createDate=date.today(),
-            )
-            
-            try:
-                db.add(images)
-                db.commit()
-                db.refresh(images)
-            except Exception as e:
-                torch.cuda.empty_cache()
-                print("이미지 데이터 저장 실패")
-                
-        del img_generator; gc.collect(); torch.cuda.empty_cache()
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"동화 생성에 실패하였습니다.: {e}")
-    
-    finally:
-        for obj_name in ["sbg", "summarizer", "img_generator", "eval"]:
-            if obj_name in locals():
-                try:
-                    obj = locals()[obj_name]
-
-                    # DiffusionPipeline GPU -> CPU 옮기기
-                    if hasattr(obj, "pipe"):
-                        try:
-                            obj.pipe.to("cpu")
-                        except:
-                            pass
-
-                    # Torch 모델 GPU -> CPU 옮기기
-                    if hasattr(obj, "to"):
-                        try:
-                            obj.to("cpu")
-                        except:
-                            pass
-
-                    # 원래 변수 자체를 해제
-                    del locals()[obj_name]
-
-                except Exception as e:
-                    print(f"[WARN] {obj_name} 메모리 해제 중 오류 발생: {e}")
-
-        gc.collect()
-        torch.cuda.empty_cache()
-        
-    return GenerateStoryResponse(message="동화생성을 완료했습니다.", fid=story.fid)
-
 @app.post("/voices/register", response_model=VoiceRegisterResponse) 
 async def register_voice(uid: int = Form(...), audio: UploadFile = File(...), db: Session = Depends(get_db)):
-    if not XI_API_KEY:
-        raise HTTPException(status_code=500, detail="missing XI_API_KEY")
-
     try:
-        # 디스크 저장 없이 스트리밍 업로드
-        files = {"files": (audio.filename, await audio.read(), audio.content_type or "audio/mpeg")}
-        data = {"name": f"{uid} voice", "description": "동화책 TTS 커스텀 목소리"}
-        headers = {"xi-api-key": XI_API_KEY}
+        save_dir = "ref_voices"
+        os.makedirs(save_dir, exist_ok=True)
+        file_path = os.path.join(save_dir, f"user_{uid}_{uuid.uuid4().hex[:8]}.wav")
 
-        async with httpx.AsyncClient(timeout=60) as client:
-            r = await client.post(ELEVEN_ADD_URL, headers=headers, data=data, files=files)
-        if r.status_code != 200:
-            raise HTTPException(status_code=502, detail=f"voice_register_failed: {r.text}")
+        with open(file_path, "wb") as f:
+            f.write(await audio.read())
 
-        voice_id = r.json().get("voice_id")
-        if not voice_id:
-            raise HTTPException(status_code=502, detail="voice_id_missing_from_provider")
+        voice_id = f"voice_{uid}_{uuid.uuid4().hex[:8]}"
 
         v = Voices(
             uid=uid,
-            voice_id=voice_id,
-            memo="", 
-            voiceFile="",
+            voice_id=voice_id, 
+            memo="",
+            voiceFile=file_path,
             createDate=date.today()
         )
-        db.add(v); db.flush(); db.refresh(v); db.commit()
+        db.add(v)
+        db.commit()
+        db.refresh(v)
 
-        return VoiceRegisterResponse(message="사용자 음성 등록에 성공하였습니다.")
-    except HTTPException:
-        raise
+        return {"message": "사용자 음성 등록 성공", "voice_id": voice_id} 
+    
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"register_internal_error: {e}")
@@ -440,35 +326,44 @@ def resume_reading(uid: int, fid: int, db: Session = Depends(get_db)):
 
 @app.post("/users/{uid}/fairy_tales/{fid}/read")
 def read_page(uid: int, fid: int, req: ReadRequest = Body(...), db: Session = Depends(get_db)):
-    if not XI_API_KEY:
-        raise HTTPException(status_code=500, detail="missing XI_API_KEY")
     v = (
-            db.query(Voices)
-            .filter(Voices.uid == uid)
-            .order_by(Voices.vid.desc())
-            .first()
-        )
-    # voice_id db 조회
-    voice_id = getattr(v, "voice_id", None)
-    return reader.stream_page(db, uid, fid, page=req.page, voice_id=voice_id)
+        db.query(Voices)
+        .filter(Voices.uid == uid)
+        .order_by(Voices.vid.desc())
+        .first()
+    )
+    voice_id = req.voice_id or getattr(v, "voice_id", None) 
+
+    if not voice_id:
+        raise HTTPException(status_code=400, detail="등록된 음성이 없습니다.")
+
+    return reader.stream_page(db, uid, fid, page=req.page, voice_id=voice_id)  # 수정됨
 
 @app.post("/tts/stream_page")
-def tts_stream_page(req: TTSPageFromListRequest, db: Session = Depends(get_db)):
-    if not XI_API_KEY:
-        raise HTTPException(status_code=500, detail="missing XI_API_KEY")
-    if not req.pages:
+def tts_stream_page(uid: int = Body(...), pages: list[str] = Body(...), page: int = Body(...), db: Session = Depends(get_db)):
+    if not pages:
         raise HTTPException(status_code=400, detail="pages_required")
-    if req.page < 1 or req.page > len(req.pages):
-        raise HTTPException(status_code=400, detail=f"invalid_page_number: 1..{len(req.pages)}")
+    if page < 1 or page > len(pages):
+        raise HTTPException(status_code=400, detail=f"invalid_page_number: 1..{len(pages)}")
 
-    text = (req.pages[req.page - 1] or "").strip()
+    text = (pages[page - 1] or "").strip()
     if not text:
         raise HTTPException(status_code=400, detail="empty_page_text")
 
+    v = (
+        db.query(Voices)
+        .filter(Voices.uid == uid)
+        .order_by(Voices.vid.desc())
+        .first()
+    )
+    voice_id = getattr(v, "voice_id", None) if v else None  
+    if not voice_id:
+        raise HTTPException(status_code=400, detail="등록된 음성이 없습니다.")
+
     return StreamingResponse(
-        sg.tts_generator(voice_id=req.voice_id, text=text),
-        media_type="audio/mpeg",
-        headers={"Content-Disposition": f'inline; filename="page{req.page}.mp3"'}
+        sg.tts_generator(voice_id=voice_id, text=text), 
+        media_type="audio/wav",
+        headers={"Content-Disposition": f'inline; filename="page{page}.wav"'}
     )
     
 # Backend API: 나의 독서기록 조회
@@ -529,22 +424,24 @@ def update_user(req: UserUpdateRequest, db: Session = Depends(get_db)):
     if not user or not verify_password(req.currentPasswd, user.passwd):
         raise HTTPException(status_code=401, detail="현재 비밀번호가 일치 하지 않습니다.")
     
-    if req.passwd == "":
-        raise HTTPException(status_code=400, detail="비밀번호를 입력해주세요.")
+    if req.passwd != "":
+        if  not bool(pattern.fullmatch(req.passwd)):
+            raise HTTPException(status_code=400, detail="비밀번호에 대소문자, 특수문자, 숫자가 모두 입력됬는지 확인해주세요.")
+        
+        if req.repasswd == "":
+            raise HTTPException(status_code=400, detail="비밀번호 재입력을 입력해주세요.")
+        
+        if req.passwd != req.repasswd:
+            raise HTTPException(status_code=400, detail="비밀번호와 비밀번호 재입력이 일치하지 않습니다.")
     
-    if not bool(pattern.fullmatch(req.passwd)):
-        raise HTTPException(status_code=400, detail="비밀번호에 대소문자, 특수문자, 숫자가 모두 입력됬는지 확인해주세요.")
+    user.name = req.name
     
-    if req.repasswd == "":
-        raise HTTPException(status_code=400, detail="비밀번호 재입력을 입력해주세요.")
-    
-    if req.passwd != req.repasswd:
-        raise HTTPException(status_code=400, detail="비밀번호와 비밀번호 재입력이 일치하지 않습니다.")
-    
-    # 비밀번호 해싱
-    hashed_passwd = pwd_context.hash(req.passwd)
-    
-    user.passwd = hashed_passwd
+    if req.passwd != "":
+        # 비밀번호 해싱
+        hashed_passwd = pwd_context.hash(req.passwd)
+        
+        user.passwd = hashed_passwd
+        
     user.updateDate = date.today()
 
     try:
@@ -629,6 +526,18 @@ def search_books(
         record = query.filter(FairyTale.fid == fid).first()
         if not record:
             raise HTTPException(status_code=404, detail="해당 동화를 찾을 수 없음")
+        
+        log = db.query(FairyTaleLog).filter(FairyTaleLog.fid == fid, FairyTaleLog.uid == uid).first()
+        print(log)
+        if not log:
+            f = FairyTaleLog(
+                uid=uid,
+                fid=fid,
+                clip=1, 
+                createDate=date.today(),
+                updateDate=date.today()
+            )
+            db.add(f); db.flush(); db.refresh(f); db.commit()
 
         # contents 분리
         chunks = _split_into_chunks(record.contents)
@@ -736,31 +645,33 @@ def get_default_fairy_tales(db: Session = Depends(get_db)):
     DB에 저장된 모든 동화 목록을 가져오는 API (중복 제거)
     """
     fairy_tales_with_images = []
-
-    # FairyTale과 FairyTaleImages를 조인해서 각 동화별 첫 번째 이미지만 가져오기
-    tales_with_images = (
-        db.query(
-            FairyTale,
-            FairyTaleImages
-        )
-        .outerjoin(FairyTaleImages, FairyTale.fid == FairyTaleImages.fid)
-        .group_by(FairyTale.fid)  # fid 기준으로 그룹화 (중복 제거)
-        .order_by(FairyTale.fid, FairyTaleImages.image_id.asc())
+    
+    # 1. 기본 동화 목록만 가져오기
+    tales = (
+        db.query(FairyTale)
+        .filter(FairyTale.uid == 0)
+        .order_by(FairyTale.fid.asc())
         .all()
     )
 
-    for tale, image in tales_with_images:
+    # 2. 각 동화에 대해 첫 번째 이미지만 가져오기
+    for tale in tales:
         image_data = None
+        image = (
+            db.query(FairyTaleImages)
+            .filter(FairyTaleImages.fid == tale.fid)
+            .order_by(FairyTaleImages.image_id.asc())  # 대표 이미지 기준
+            .first()
+        )
+
         if image and image.file_name:
             full_image_path = f"{image.image_path}/{image.file_name}"
             if os.path.exists(full_image_path):
                 try:
                     with open(full_image_path, "rb") as image_file:
                         encoded = base64.b64encode(image_file.read()).decode()
-                        if image.file_name.lower().endswith('.png'):
-                            image_data = f"data:image/png;base64,{encoded}"
-                        else:
-                            image_data = f"data:image/jpeg;base64,{encoded}"
+                        ext = image.file_name.lower().split('.')[-1]
+                        image_data = f"data:image/{ext};base64,{encoded}"
                 except Exception as e:
                     print(f"Error encoding image: {e}")
                     image_data = None
@@ -772,10 +683,117 @@ def get_default_fairy_tales(db: Session = Depends(get_db)):
             "summary": tale.summary,
             "contents": tale.contents,
             "createDate": tale.createDate,
-            "image": image_data,  # base64 인코딩된 이미지
+            "image": image_data,
         })
 
     return {"data": fairy_tales_with_images}
+
+
+# 로그인 사용자용 동화 목록 조회
+@app.get("/api/fairy_tales/my")
+def get_my_fairy_tales( 
+    db : Session = Depends(get_db),
+    current_user: Users = Depends(get_current_user)
+):
+
+    # print("현재 로그인된 사용자 UID:", current_user.uid)
+
+    """
+        로그인한 사용자의 동화 목록만 가져오기 
+    """
+    fairy_tales_with_images = []
+    
+    # 1. 중복 없이 동화 목록만 가져오기
+    tales = (
+        db.query(FairyTale)
+        .filter(
+            or_(
+                FairyTale.uid == current_user.uid,
+                FairyTale.uid == 0
+            )
+        )
+        .order_by(FairyTale.fid.asc())
+        .all()
+    )
+    # 2. 각 동화에 대해 대표 이미지 하나만 가져오기
+    for tale in tales:
+        image_data = None
+        image = (
+            db.query(FairyTaleImages)
+            .filter(FairyTaleImages.fid == tale.fid)
+            .order_by(FairyTaleImages.image_id.asc())  # 첫 번째 이미지
+            .first()
+        )
+
+        if image and image.file_name:
+            full_image_path = f"{image.image_path}/{image.file_name}"
+            if os.path.exists(full_image_path):
+                try:
+                    with open(full_image_path, "rb") as image_file:
+                        encoded = base64.b64encode(image_file.read()).decode()
+                        ext = image.file_name.lower().split('.')[-1]
+                        image_data = f"data:image/{ext};base64,{encoded}"
+                except Exception as e:
+                    print(f"Error encoding image: {e}")
+                    image_data = None
+
+        fairy_tales_with_images.append({
+            "fid": tale.fid,
+            "uid": tale.uid,
+            "title": tale.title,
+            "summary": tale.summary,
+            "contents": tale.contents,
+            "createDate": tale.createDate,
+            "image": image_data,
+        })
+
+    return {"data": fairy_tales_with_images}
+
+
+@app.post("/users/{uid}/fairy_tales/{fid}/progress", response_model=UpdateReadingProgressResponse)
+def update_reading_progress(
+    uid: int = Path(..., description="사용자 ID"),
+    fid: int = Path(..., description="동화 ID"),
+    req: UpdateReadingProgressRequest = Body(...),
+    db: Session = Depends(get_db)
+):
+    
+    # 동화책이 존재하는지 확인
+    fairy_tale = db.query(FairyTale).filter(FairyTale.fid == fid).first()
+    if not fairy_tale:
+        raise HTTPException(status_code=404, detail="동화책을 찾을 수 없습니다.")
+    
+    # 기존 로그 찾기
+    log = db.query(FairyTaleLog).filter(
+        FairyTaleLog.uid == uid,
+        FairyTaleLog.fid == fid
+    ).first()
+    
+    if log:
+        # 기존 로그 업데이트
+        log.clip = req.page
+        log.updateDate = date.today()
+    else:
+        # 새 로그 생성 (처음 읽는 동화책)
+        log = FairyTaleLog(
+            uid=uid,
+            fid=fid,
+            clip=req.page,
+            createDate=date.today(),
+            updateDate=date.today()
+        )
+        db.add(log)
+    
+    try:
+        db.commit()
+        db.refresh(log)
+        return UpdateReadingProgressResponse(
+            message="독서 진행 상황이 저장되었습니다.",
+            page=req.page
+        )
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"진행 상황 저장 실패: {e}")
 
 
 # 폴더 내 모든 이미지를 정렬된 순서로 조회

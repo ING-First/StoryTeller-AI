@@ -2,12 +2,13 @@ from __future__ import annotations
 from typing import List, Dict, Optional, Any
 from pathlib import Path
 from transformers import AutoTokenizer, AutoModelForCausalLM, GenerationConfig, pipeline
+from .lora_manager import get_lora_manager, ensure_model_loaded, switch_to_lora
 from peft import PeftModel
 import torch
 import re
 class StoryEvaluator:
     CRITERIA = [
-        "시스템 프롬프트 반영 여부",
+        "시스템 프롬프트 반영 여부(별도로 없는 경우 5점)",
         "교훈",
         "문법성",
         "비속어 등 부적절한 언어 포함되지 않는지 여부",
@@ -19,87 +20,25 @@ class StoryEvaluator:
         r'(?m)^\s*(?:[-•]\s*)?(?:\d+\s*[\.\)]\s*)?[^\n:]+[:：]\s*([1-5])\s*점'
     )
 
-    def __init__(
-        self,
-        base_model_name: str = "skt/A.X-4.0-Light",
-        max_new_tokens: int = 100,
-        repetition_penalty: float = 1.1,
-        do_sample: bool = False,
-        device_map: Optional[str] = None,
-    ):
-        
-        self.base_model_name = base_model_name
-        
-        BASE_DIR = Path(__file__).resolve().parent.parent
-        self.lora_model_path = BASE_DIR.parent / "models" / "lora_eval"
-        
+    def __init__(self):
+        self.lora_manager = get_lora_manager()        
         self.evaluation_criteria = self.CRITERIA
-        self.max_new_tokens = max_new_tokens
-        self.repetition_penalty = repetition_penalty
-        self.do_sample = do_sample
+        self._ensure_model_loaded()
+        
+    def _ensure_model_loaded(self):
+        if not ensure_model_loaded():
+            raise RuntimeError("베이스 모델 로딩 실패")
+        
+        if not switch_to_lora("eval"):
+            print("[StoryEvaluator] WARNING: eval LoRA 로딩 실패, 베이스 모델 사용")
 
-        self.tokenizer = AutoTokenizer.from_pretrained(
-            self.base_model_name,
-            trust_remote_code=True
-        )
-        if self.tokenizer.pad_token is None:
-            self.tokenizer.pad_token = self.tokenizer.eos_token
+    @property
+    def model(self):
+        return self.lora_manager.get_current_model()
 
-        self.torch_dtype = (
-            torch.bfloat16
-            if torch.cuda.is_available()
-            and torch.cuda.get_device_capability(0)[0] >= 8
-            else torch.float16
-        )
-        if device_map is None:
-            device_map = "cuda:0" if torch.cuda.is_available() else "auto"
-        self.device_map = device_map
-
-        # Base model
-        self.base_model = AutoModelForCausalLM.from_pretrained(
-            self.base_model_name,
-            torch_dtype=self.torch_dtype,
-            device_map=self.device_map,
-            trust_remote_code=True,
-            low_cpu_mem_usage=True,
-        )
-
-        try:
-            self.model = PeftModel.from_pretrained(
-                self.base_model,
-                self.lora_model_path,
-                torch_dtype=self.torch_dtype,
-            )
-        except Exception as e:
-            print(f"[WARN] LoRA 모델 로드 실패. 베이스 모델 로드: {e}")
-            self.model = self.base_model
-
-        if torch.cuda.is_available():
-            self.model = self.model.cuda()
-        self.model.eval()
-
-        gen_cfg = GenerationConfig(
-            do_sample=self.do_sample,
-            temperature=None if not self.do_sample else 0.7,
-            top_p=None if not self.do_sample else 0.9,
-            top_k=None if not self.do_sample else 50,
-            repetition_penalty=self.repetition_penalty,
-            pad_token_id=self.tokenizer.eos_token_id,
-            eos_token_id=self.tokenizer.eos_token_id,
-            max_new_tokens=self.max_new_tokens,
-            use_cache=True,
-        )
-        self.model.generation_config = gen_cfg
-
-        # Pipeline
-        self.pipe = pipeline(
-            "text-generation",
-            model=self.model,
-            tokenizer=self.tokenizer,
-            return_full_text=False,
-            batch_size=1,
-            device_map=None,
-        )
+    @property
+    def tokenizer(self):
+        return self.lora_manager.get_tokenizer()
 
     @staticmethod
     def _system_prompt() -> str:
@@ -133,7 +72,14 @@ class StoryEvaluator:
         prompt: str,
         parse_scores_only: bool = False,
         expected_items: int = 6,
+        max_new_tokens: int = 100,
+        do_sample: bool = False,
+        repetition_penalty: float = 1.1,
     ) -> Dict[str, Any]:
+        
+        # eval LoRA 활성화 확인
+        if self.lora_manager.get_current_lora_name() != "eval":
+            switch_to_lora("eval")
         
         chat = self.make_chat_prompt(story_text, prompt)
 
@@ -149,16 +95,36 @@ class StoryEvaluator:
         if torch.cuda.is_available():
             torch.cuda.reset_peak_memory_stats()
 
+        # 토크나이징
+        inputs = self.tokenizer(
+            prompt_text,
+            return_tensors="pt",
+            max_length=1024,
+            truncation=True,
+            padding=True,
+        )
+        
+        if self.lora_manager.device == "cuda":
+            inputs = {k: v.to(self.lora_manager.device) for k, v in inputs.items()}
+
+        input_len = inputs["input_ids"].shape[1]
+
         with torch.inference_mode():
             try:
-                out = self.pipe(
-                    prompt_text,
-                    max_new_tokens=self.max_new_tokens,
-                    do_sample=self.do_sample,
-                    temperature=None if not self.do_sample else 0.7,
-                    repetition_penalty=self.repetition_penalty,
+                outputs = self.model.generate(
+                    input_ids=inputs["input_ids"],
+                    max_new_tokens=max_new_tokens,
+                    do_sample=do_sample,
+                    temperature=None if not do_sample else 0.7,
+                    repetition_penalty=repetition_penalty,
                     use_cache=True,
-                )[0]["generated_text"]
+                    pad_token_id=self.tokenizer.pad_token_id,
+                    eos_token_id=self.tokenizer.eos_token_id,
+                )
+                
+                gen_tokens = outputs[0][input_len:]
+                out = self.tokenizer.decode(gen_tokens, skip_special_tokens=True)
+                
             except Exception as e:
                 out = f"평가 생성 실패: {e}"
 
@@ -175,16 +141,13 @@ class StoryEvaluator:
         text: str,
         expected: int = 6,
     ) -> List[int]:
-
         scores = [0] * expected
-
         lines = text.strip().splitlines()
         for line in lines:
             m = re.match(r"^\s*(\d+)\.\s*[^\:：]+[:：]\s*([0-5]?)\s*점?", line)
             if m:
-                idx = int(m.group(1)) - 1  # 1번 항목: index 0으로 설정
+                idx = int(m.group(1)) - 1
                 val = m.group(2)
                 if val.isdigit():
                     scores[idx] = int(val)
-
         return scores[:expected]

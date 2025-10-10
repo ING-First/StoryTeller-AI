@@ -1,10 +1,14 @@
 from diffusers import StableDiffusionPipeline
 from pathlib import Path
+from dotenv import load_dotenv
 import torch
 import os
 
 class ImageGenerator:
     def __init__(self, pre_trained_model_name="Bingsu/my-korean-stable-diffusion-v1-5"):
+        dotenv_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
+        load_dotenv(dotenv_path)
+        
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.dtype = torch.float16 if self.device == "cuda" else torch.float32
         self.pre_trained_model_name = pre_trained_model_name
@@ -12,7 +16,7 @@ class ImageGenerator:
 
         BASE_DIR = Path(__file__).resolve().parent.parent
         self.lora_path = BASE_DIR.parent / "models" / "lora-diffusion-weight"
-        self.save_path = "/content/gdrive/MyDrive/Colab Notebooks/fairyTale_images"
+        self.save_path = os.getenv("IMAGE_PATH")
 
         self.pipeline = None
 
