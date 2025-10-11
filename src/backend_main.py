@@ -321,7 +321,7 @@ def read_page(uid: int, fid: int, req: ReadRequest = Body(...), db: Session = De
     if not voice_id:
         raise HTTPException(status_code=400, detail="등록된 음성이 없습니다.")
 
-    return reader.stream_page(db, uid, fid, page=req.page, voice_id=voice_id)  # 수정됨
+    return reader.stream_page(db, uid, fid, page=req.page, voice_id=voice_id) 
 
 @app.post("/tts/stream_page")
 def tts_stream_page(uid: int = Body(...), pages: list[str] = Body(...), page: int = Body(...), db: Session = Depends(get_db)):

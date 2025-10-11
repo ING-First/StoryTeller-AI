@@ -5,7 +5,7 @@ import json, os, re
 from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
-from db.db_models import FairyTale, FairyTaleLog
+from db.db_models import FairyTale, FairyTaleLog, Voices
 from generate_story.generate_sound import SoundGenerator
 
 def _as_pages(contents: Union[List[str], str, bytes, None]) -> List[str]:
@@ -100,7 +100,8 @@ class StoryReader:
         uid: int,
         fid: int,
         page: int,
-        ref_wav: Optional[str] = "ref_audio.wav",
+        voice_id: Optional[str] = None, 
+        ref_wav: Optional[str] = None,
     ) -> StreamingResponse:
         ft = self._get_fairy_tale_or_404(db, uid, fid)
         pages = _as_pages(ft.contents)
@@ -147,26 +148,49 @@ class StoryReader:
             db.rollback()
             raise HTTPException(status_code=500, detail=f"log_update_failed: {e}")
 
-        # Zonos TTS 실시간 스트리밍
-        if not ref_wav or not os.path.isfile(ref_wav):  
-            raise HTTPException(status_code=400, detail=f"참조 오디오 파일 없음: {ref_wav}")
-        print(f"[DEBUG] Zonos TTS 스트리밍 시작. ref_wav={ref_wav}, 텍스트 길이={len(text)}")
+        # voice_id 기반 사용자 음성 파일 탐색
+        if voice_id:
+            print(f"[DEBUG] 사용자 voice_id로 등록된 음성 파일 탐색 중: {voice_id}")
+            voice_entry = db.query(Voices).filter(Voices.voice_id == voice_id).first()
+            if not voice_entry:
+                raise HTTPException(status_code=404, detail=f"등록된 음성을 찾을 수 없습니다: {voice_id}")
+            
+            ref_wav = getattr(voice_entry, "voiceFile", None)
+            if not ref_wav or not os.path.exists(ref_wav):
+                raise HTTPException(status_code=400, detail=f"음성 파일 경로가 유효하지 않습니다: {ref_wav}")
+
+            print(f"[DEBUG] 사용자 음성 파일 사용: {ref_wav}")
+        else:
+            # 기존 ref_wav fallback
+            if not ref_wav or not os.path.exists(ref_wav):
+                base_path, _ = os.path.splitext(ref_wav or "ref_audio")
+                for ext in [".wav", ".mp3", ".m4a"]:
+                    candidate = base_path + ext
+                    if os.path.exists(candidate):
+                        ref_wav = candidate
+                        print(f"[DEBUG] 대체 오디오 파일 발견: {ref_wav}")
+                        break
+                else:
+                    raise HTTPException(status_code=400, detail=f"참조 오디오 파일을 찾을 수 없습니다: {ref_wav}")
+    
+            print(f"[DEBUG] 기본 ref_wav 사용: {ref_wav}")
+
+        # TTS 스트리밍 실행 - 등록된 음성 파일 or 기본 ref_wav 사용
         return StreamingResponse(
-            self.sg.tts_generator(ref_wav=ref_wav, text=text),
-            media_type="audio/wav",
+            self.sg.tts_generator(voice_id=voice_id, ref_wav=ref_wav, text=text),
+            media_type="audio/wav", 
             headers={
-                "Content-Disposition": f'inline; filename="fid{fid}_page{page}.wav"',
+                "Content-Disposition": f'inline; filename=\"fid{fid}_page{page}.wav\"',
                 "X-Total-Pages": str(len(pages)),
                 "X-Current-Page": str(page),
             },
         )
 
-
     def _get_fairy_tale_or_404(self, db: Session, uid: int, fid: int) -> FairyTale:
         print(f"[DEBUG] _get_fairy_tale_or_404 호출됨. uid: {uid}, fid: {fid}")
         ft = (
             db.query(FairyTale)
-            .filter(FairyTale.fid == fid, FairyTale.uid == uid)
+            .filter((FairyTale.fid == fid) & ((FairyTale.uid == uid) | (FairyTale.uid == 0)))
             .first()
         )
         if not ft:
