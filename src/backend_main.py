@@ -69,7 +69,7 @@ def get_current_user(
     except JWTError:
         raise HTTPException(status_code=401, detail="=Token decode error")
     
-    user = db.query(Users),filter(Users.uid == uid).first()
+    user = db.query(Users).filter(Users.uid == uid).first()
     if user is None:
         raise HTTPException(status_code=404, detail="User not found")
     return user
@@ -317,11 +317,38 @@ def read_page(uid: int, fid: int, req: ReadRequest = Body(...), db: Session = De
         .first()
     )
     voice_id = req.voice_id or getattr(v, "voice_id", None) 
-
     if not voice_id:
         raise HTTPException(status_code=400, detail="등록된 음성이 없습니다.")
-
     return reader.stream_page(db, uid, fid, page=req.page, voice_id=voice_id) 
+
+@app.post("/users/{uid}/fairy_tales/{fid}/progress", response_model=UpdateReadingProgressResponse)
+def update_reading_progress(uid: int, fid: int, req: UpdateReadingProgressRequest = Body(...), db: Session = Depends(get_db)):
+    print(f"[DEBUG] /progress 호출됨 - uid={uid}, fid={fid}, page={req.page}")
+    ft = db.query(FairyTale).filter(
+        (FairyTale.fid == fid) & ((FairyTale.uid == uid) | (FairyTale.uid == 0))
+    ).first()
+    if not ft:
+        raise HTTPException(status_code=404, detail="해당 동화를 찾을 수 없습니다.")
+
+    log = db.query(FairyTaleLog).filter(FairyTaleLog.uid == uid, FairyTaleLog.fid == fid).first()
+    clip_number = (req.page + 1) // 2
+
+    try:
+        if not log:
+            print(f"[DEBUG] 새 로그 생성 - clip={clip_number}")
+            log = FairyTaleLog(uid=uid, fid=fid, clip=clip_number, createDate=date.today(), updateDate=date.today())
+            db.add(log)
+        else:
+            print(f"[DEBUG] 로그 업데이트 - 기존 clip={log.clip}, 새 clip={clip_number}")
+            log.clip = max(log.clip, clip_number)
+            log.updateDate = date.today()
+        db.commit()
+        db.refresh(log)
+        return UpdateReadingProgressResponse(message="진행도가 업데이트되었습니다.", page=req.page)
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"진행도 업데이트 실패: {e}")
+
 
 @app.post("/tts/stream_page")
 def tts_stream_page(uid: int = Body(...), pages: list[str] = Body(...), page: int = Body(...), db: Session = Depends(get_db)):
