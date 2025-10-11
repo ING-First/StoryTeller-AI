@@ -18,19 +18,25 @@ RUN apt-get update && apt-get install -y \
 # 작업 디렉토리
 WORKDIR /app
 
-# 핵심 패키지 먼저 설치 (버전 호환성)
+# 핵심 패키지 먼저 설치
 RUN pip install --upgrade pip setuptools wheel && \
     pip install torch==2.1.2+cu121 torchvision==0.16.2+cu121 torchaudio==2.1.2+cu121 \
         --extra-index-url https://download.pytorch.org/whl/cu121
 
-# 호환되는 버전으로 설치
 COPY requirements.txt .
+
+RUN git clone https://github.com/Zyphra/Zonos.git /tmp/Zonos && \
+    cd /tmp/Zonos && \
+    pip install --no-cache-dir -e . && \
+    cd /app
+
 RUN pip install --no-cache-dir -r requirements.txt
+
+RUN rm -rf /tmp/Zonos
 
 # StoryTeller-AI 소스 코드 복사
 COPY . /app
 
-# 포트 노출
 EXPOSE 8000 8001
 
 CMD ["python3", "start_server.py"]
