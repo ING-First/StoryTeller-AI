@@ -21,24 +21,12 @@ class SoundGenerator:
         # 음성파일 불러오기
         voice_record = db.query(Voices).filter(Voices.voice_id == voice_id).first()
         if not voice_record:
-            raise FileNotFoundError(f"[ERROR] voice_id={voice_id}에 해당하는 음성이 DB에 없습니다.")
+            raise FileNotFoundError(f"[ERROR] voice_id={voice_id} not found")
 
-        #  bytes 변환
-        try:
-            audio_bytes = (
-                base64.b64decode(voice_record.ref_audio)
-                if isinstance(voice_record.ref_audio, str)
-                else voice_record.ref_audio
-            )
-        except Exception as e:
-            raise ValueError(f"[ERROR] ref_audio 디코딩 실패: {e}")
-        
-        # 임시 wav 파일 생성
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp_ref:
-            tmp_ref.write(audio_bytes)
-            ref_wav_path = tmp_ref.name
+        ref_wav_path = voice_record.voiceFile
 
-        print(f"[DEBUG] 임시 ref_wav 생성됨: {ref_wav_path}")
+        if not os.path.exists(ref_wav_path):
+            raise FileNotFoundError(f"[ERROR] ref_wav not found: {ref_wav_path}")
 
         wav, sampling_rate = torchaudio.load(ref_wav_path)
         speaker = self.model.make_speaker_embedding(wav, sampling_rate)
