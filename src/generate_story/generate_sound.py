@@ -13,7 +13,7 @@ class SoundGenerator:
         print("[DEBUG] Zonos 모델 로드 완료")
 
     # TTS 오디오 스트리밍
-    def tts_generator(self, ref_wav: str, text: str):
+    def tts_generator(self, ref_wav: str, text: str, voice_id=None):
         print(f"[DEBUG] tts_generator 호출됨. ref_wav={ref_wav}, text={text[:50]}...")
 
         # 화자 임베딩
