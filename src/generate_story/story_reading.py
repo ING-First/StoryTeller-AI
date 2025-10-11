@@ -101,7 +101,6 @@ class StoryReader:
         fid: int,
         page: int,
         voice_id: Optional[str] = None, 
-        ref_wav: Optional[str] = None,
     ) -> StreamingResponse:
         ft = self._get_fairy_tale_or_404(db, uid, fid)
         pages = _as_pages(ft.contents)
@@ -149,35 +148,18 @@ class StoryReader:
             raise HTTPException(status_code=500, detail=f"log_update_failed: {e}")
 
         # voice_id 기반 사용자 음성 파일 탐색
-        if voice_id:
-            print(f"[DEBUG] 사용자 voice_id로 등록된 음성 파일 탐색 중: {voice_id}")
-            voice_entry = db.query(Voices).filter(Voices.voice_id == voice_id).first()
-            if not voice_entry:
-                raise HTTPException(status_code=404, detail=f"등록된 음성을 찾을 수 없습니다: {voice_id}")
-            
-            ref_wav = getattr(voice_entry, "voiceFile", None)
-            if not ref_wav or not os.path.exists(ref_wav):
-                raise HTTPException(status_code=400, detail=f"음성 파일 경로가 유효하지 않습니다: {ref_wav}")
-
-            print(f"[DEBUG] 사용자 음성 파일 사용: {ref_wav}")
-        else:
-            # 기존 ref_wav fallback
-            if not ref_wav or not os.path.exists(ref_wav):
-                base_path, _ = os.path.splitext(ref_wav or "ref_audio")
-                for ext in [".wav", ".mp3", ".m4a"]:
-                    candidate = base_path + ext
-                    if os.path.exists(candidate):
-                        ref_wav = candidate
-                        print(f"[DEBUG] 대체 오디오 파일 발견: {ref_wav}")
-                        break
-                else:
-                    raise HTTPException(status_code=400, detail=f"참조 오디오 파일을 찾을 수 없습니다: {ref_wav}")
-    
-            print(f"[DEBUG] 기본 ref_wav 사용: {ref_wav}")
+        if not voice_id:
+            raise HTTPException(status_code=400, detail="voice_id가 필요합니다.")
+        print(f"[DEBUG] DB에서 voice_id={voice_id}로 음성 불러오기 시작")
+        
+        try:
+            tts_stream = self.sg.tts_generator(db=db, text=text, voice_id=voice_id)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"TTS 생성 실패: {e}")
 
         # TTS 스트리밍 실행 - 등록된 음성 파일 or 기본 ref_wav 사용
         return StreamingResponse(
-            self.sg.tts_generator(voice_id=voice_id, ref_wav=ref_wav, text=text),
+            tts_stream,
             media_type="audio/wav", 
             headers={
                 "Content-Disposition": f'inline; filename=\"fid{fid}_page{page}.wav\"',
