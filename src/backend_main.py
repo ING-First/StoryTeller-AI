@@ -13,6 +13,7 @@ from generate_story.story_reading import StoryReader
 from passlib.context import CryptContext
 from jose import jwt, JWTError
 from dotenv import load_dotenv
+import subprocess
 import uuid
 
 from generate_story.generate_sound import SoundGenerator
@@ -288,26 +289,30 @@ async def register_voice(uid: int = Form(...), audio: UploadFile = File(...), db
     try:
         save_dir = "ref_voices"
         os.makedirs(save_dir, exist_ok=True)
-        file_path = os.path.join(save_dir, f"user_{uid}_{uuid.uuid4().hex[:8]}.wav")
 
-        with open(file_path, "wb") as f:
+        # 업로드 파일 저장 (WebM 그대로)
+        file_id = uuid.uuid4().hex[:8]
+        save_path = os.path.join(save_dir, f"user_{uid}_{file_id}.webm")
+
+        with open(save_path, "wb") as f:
             f.write(await audio.read())
+        print(f"[DEBUG] 업로드된 음성 저장 완료 → {save_path}")
 
+        # DB 저장
         voice_id = f"voice_{uid}_{uuid.uuid4().hex[:8]}"
-
         v = Voices(
             uid=uid,
-            voice_id=voice_id, 
+            voice_id=voice_id,
             memo="",
-            voiceFile=file_path,
+            voiceFile=save_path,  
             createDate=date.today()
         )
         db.add(v)
         db.commit()
         db.refresh(v)
 
-        return {"message": "사용자 음성 등록 성공", "voice_id": voice_id} 
-    
+        return {"message": "사용자 음성 등록 성공", "voice_id": voice_id}
+
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"register_internal_error: {e}")
@@ -413,12 +418,18 @@ def tts_stream_page(uid: int = Body(...), pages: list[str] = Body(...), page: in
     if not voice_id:
         raise HTTPException(status_code=400, detail="등록된 음성이 없습니다.")
 
+    audio_stream = sg.tts_generator(db=db, voice_id=voice_id, text=text)  
+
     return StreamingResponse(
-        sg.tts_generator(voice_id=voice_id, text=text), 
-        media_type="audio/wav",
-        headers={"Content-Disposition": f'inline; filename="page{page}.wav"'}
+        audio_stream,
+        media_type="audio/wav",  
+        headers={
+            "Content-Disposition": f'inline; filename="page{page}.wav"',
+            "Cache-Control": "no-cache",  
+            "Access-Control-Allow-Origin": "*",
+        },
     )
-    
+        
 # Backend API: 나의 독서기록 조회
 @app.get("/users/{uid}/check_records", response_model=RecordCheckResponse)
 def check_records(uid: int, db: Session = Depends(get_db)):
