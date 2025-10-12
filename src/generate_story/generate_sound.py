@@ -92,11 +92,8 @@ class SoundGenerator:
             print("[DEBUG] 디코딩 완료") 
 
             # 출력 저장
-            output_path = "/tmp/tts_output.wav"  
-            torchaudio.save(output_path, wavs[0], self.model.autoencoder.sampling_rate)  
-            print(f"[DEBUG] 생성된 오디오 저장 완료: {output_path}")  
-
-            return output_path  
+            torchaudio.save("/tmp/tts_output.wav", wavs[0], self.model.autoencoder.sampling_rate)
+            return open("/tmp/tts_output.wav", "rb")
 
         except Exception as e:
             print(f"[ERROR] TTS 전체 과정 중 예외 발생: {e}")
