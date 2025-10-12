@@ -114,6 +114,20 @@ class StoryReader:
         text = (pages[page - 1] or "").strip()
         if not text:
             raise HTTPException(status_code=400, detail="선택한 페이지 내용이 비어있습니다.")
+        
+        if not voice_id:
+            print(f"[DEBUG] voice_id 미입력됨 → 최신 사용자 음성 자동 탐색 uid={uid}")
+            latest_voice = (
+                db.query(Voices)
+                .filter(Voices.uid == uid)
+                .order_by(Voices.createDate.desc(), Voices.vid.desc())
+                .first()
+            )
+            if not latest_voice:
+                raise HTTPException(status_code=404, detail="등록된 음성이 없습니다. 먼저 음성을 생성해주세요.")
+            
+            voice_id = latest_voice.voice_id
+            print(f"[DEBUG] 최신 voice 자동 선택됨: {voice_id}")
 
         # clip 업데이트
         print(f"[DEBUG] 읽기 로그 업데이트 시작")
