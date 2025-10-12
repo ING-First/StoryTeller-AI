@@ -62,24 +62,17 @@ def get_current_user(
 
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        print("🔓 Decoded JWT payload:", payload)
-
+        print("Decoded payload:", payload) 
         uid: int = int(payload.get("sub"))
-        print("✅ Extracted UID from token:", uid)
-        user = db.query(Users).filter(Users.uid == uid).first()
-        print("👤 Fetched user from DB:", user)
-
-        if user is None:
-            raise HTTPException(status_code=404, detail="User not found")
-        
         if uid is None:
             raise HTTPException(status_code=401, detail="Invalid authentication credentials")
-        return user
-    
     except JWTError:
         raise HTTPException(status_code=401, detail="=Token decode error")
     
-
+    user = db.query(Users).filter(Users.uid == uid).first()
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    return user
 
 class VoiceRegisterResponse(BaseModel): 
     message: str
@@ -333,11 +326,38 @@ def read_page(uid: int, fid: int, req: ReadRequest = Body(...), db: Session = De
         .first()
     )
     voice_id = req.voice_id or getattr(v, "voice_id", None) 
-
     if not voice_id:
         raise HTTPException(status_code=400, detail="등록된 음성이 없습니다.")
+    return reader.stream_page(db, uid, fid, page=req.page, voice_id=voice_id) 
 
-    return reader.stream_page(db, uid, fid, page=req.page, voice_id=voice_id)  # 수정됨
+@app.post("/users/{uid}/fairy_tales/{fid}/progress", response_model=UpdateReadingProgressResponse)
+def update_reading_progress(uid: int, fid: int, req: UpdateReadingProgressRequest = Body(...), db: Session = Depends(get_db)):
+    print(f"[DEBUG] /progress 호출됨 - uid={uid}, fid={fid}, page={req.page}")
+    ft = db.query(FairyTale).filter(
+        (FairyTale.fid == fid) & ((FairyTale.uid == uid) | (FairyTale.uid == 0))
+    ).first()
+    if not ft:
+        raise HTTPException(status_code=404, detail="해당 동화를 찾을 수 없습니다.")
+
+    log = db.query(FairyTaleLog).filter(FairyTaleLog.uid == uid, FairyTaleLog.fid == fid).first()
+    clip_number = (req.page + 1) // 2
+
+    try:
+        if not log:
+            print(f"[DEBUG] 새 로그 생성 - clip={clip_number}")
+            log = FairyTaleLog(uid=uid, fid=fid, clip=clip_number, createDate=date.today(), updateDate=date.today())
+            db.add(log)
+        else:
+            print(f"[DEBUG] 로그 업데이트 - 기존 clip={log.clip}, 새 clip={clip_number}")
+            log.clip = max(log.clip, clip_number)
+            log.updateDate = date.today()
+        db.commit()
+        db.refresh(log)
+        return UpdateReadingProgressResponse(message="진행도가 업데이트되었습니다.", page=req.page)
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"진행도 업데이트 실패: {e}")
+
 
 @app.post("/tts/stream_page")
 def tts_stream_page(uid: int = Body(...), pages: list[str] = Body(...), page: int = Body(...), db: Session = Depends(get_db)):
@@ -646,7 +666,7 @@ def get_default_fairy_tales(db: Session = Depends(get_db)):
     """
     fairy_tales_with_images = []
     
-    # 1. 기본 동화 목록만 가져오기
+    # 기본 동화 목록 가져오기
     tales = (
         db.query(FairyTale)
         .filter(FairyTale.uid == 0)
@@ -654,68 +674,7 @@ def get_default_fairy_tales(db: Session = Depends(get_db)):
         .all()
     )
 
-    # 2. 각 동화에 대해 첫 번째 이미지만 가져오기
-    for tale in tales:
-        image_data = None
-        image = (
-            db.query(FairyTaleImages)
-            .filter(FairyTaleImages.fid == tale.fid)
-            .order_by(FairyTaleImages.image_id.asc())  # 대표 이미지 기준
-            .first()
-        )
-
-        if image and image.file_name:
-            full_image_path = f"{image.image_path}/{image.file_name}"
-            if os.path.exists(full_image_path):
-                try:
-                    with open(full_image_path, "rb") as image_file:
-                        encoded = base64.b64encode(image_file.read()).decode()
-                        ext = image.file_name.lower().split('.')[-1]
-                        image_data = f"data:image/{ext};base64,{encoded}"
-                except Exception as e:
-                    print(f"Error encoding image: {e}")
-                    image_data = None
-
-        fairy_tales_with_images.append({
-            "fid": tale.fid,
-            "uid": tale.uid,
-            "title": tale.title,
-            "summary": tale.summary,
-            "contents": tale.contents,
-            "createDate": tale.createDate,
-            "image": image_data,
-        })
-
-    return {"data": fairy_tales_with_images}
-
-
-# 로그인 사용자용 동화 목록 조회
-@app.get("/api/fairy_tales/my")
-def get_my_fairy_tales( 
-    db : Session = Depends(get_db),
-    current_user: Users = Depends(get_current_user)
-):
-
-    # print("현재 로그인된 사용자 UID:", current_user.uid)
-
-    """
-        로그인한 사용자의 동화 목록만 가져오기 
-    """
-    fairy_tales_with_images = []
-    
-    # 1. 중복 없이 동화 목록만 가져오기
-    tales = (
-        db.query(FairyTale)
-        .filter(
-            or_(
-                FairyTale.uid == current_user.uid,
-                FairyTale.uid == 0
-            )
-        )
-        .order_by(FairyTale.fid.asc())
-        .all()
-    )
-    # 2. 각 동화에 대해 대표 이미지 하나만 가져오기
+    # 동화에 대한 대표 이미지 하나 가져오기
     for tale in tales:
         image_data = None
         image = (
@@ -749,51 +708,43 @@ def get_my_fairy_tales(
 
     return {"data": fairy_tales_with_images}
 
-
-@app.post("/users/{uid}/fairy_tales/{fid}/progress", response_model=UpdateReadingProgressResponse)
-def update_reading_progress(
-    uid: int = Path(..., description="사용자 ID"),
-    fid: int = Path(..., description="동화 ID"),
-    req: UpdateReadingProgressRequest = Body(...),
-    db: Session = Depends(get_db)
+# 로그인 사용자용 동화 목록 조회
+@app.get("/api/fairy_tales/my")
+def get_my_fairy_tales( 
+    db : Session = Depends(get_db),
+    current_user: Users = Depends(get_current_user)
 ):
-    
-    # 동화책이 존재하는지 확인
-    fairy_tale = db.query(FairyTale).filter(FairyTale.fid == fid).first()
-    if not fairy_tale:
-        raise HTTPException(status_code=404, detail="동화책을 찾을 수 없습니다.")
-    
-    # 기존 로그 찾기
-    log = db.query(FairyTaleLog).filter(
-        FairyTaleLog.uid == uid,
-        FairyTaleLog.fid == fid
-    ).first()
-    
-    if log:
-        # 기존 로그 업데이트
-        log.clip = req.page
-        log.updateDate = date.today()
-    else:
-        # 새 로그 생성 (처음 읽는 동화책)
-        log = FairyTaleLog(
-            uid=uid,
-            fid=fid,
-            clip=req.page,
-            createDate=date.today(),
-            updateDate=date.today()
-        )
-        db.add(log)
-    
-    try:
-        db.commit()
-        db.refresh(log)
-        return UpdateReadingProgressResponse(
-            message="독서 진행 상황이 저장되었습니다.",
-            page=req.page
-        )
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=f"진행 상황 저장 실패: {e}")
+    fairy_tales_with_images = []
+    tales_with_images = (
+        db.query(FairyTale, FairyTaleImages)
+        .outerjoin(FairyTaleImages, FairyTale.fid == FairyTaleImages.fid) 
+        .filter(or_(FairyTale.uid == current_user.uid, FairyTale.uid == 0))
+        .group_by(FairyTale.fid)
+        .order_by(FairyTale.fid, FairyTaleImages.image_id.asc())
+        .all()
+    )
+
+    for tale, image in tales_with_images:
+        image_data = None
+        if image and image.file_name:
+            full_image_path = f"{image.image_path}/{image.file_name}"
+            if os.path.exists(full_image_path):
+                with open(full_image_path, "rb") as image_file:
+                    encoded = base64.b64encode(image_file.read()).decode()
+                    ext = "png" if image.file_name.lower().endswith(".png") else "jpeg"
+                    image_data = f"data:image/{ext};base64,{encoded}"
+
+        fairy_tales_with_images.append({
+            "fid": tale.fid,
+            "uid": tale.uid,
+            "title": tale.title,
+            "summary": tale.summary,
+            "contents": tale.contents,
+            "createDate": tale.createDate,
+            "image": image_data,
+        })
+
+    return {"data": fairy_tales_with_images}
 
 
 # 폴더 내 모든 이미지를 정렬된 순서로 조회

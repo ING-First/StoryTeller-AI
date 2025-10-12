@@ -4,6 +4,8 @@ from zonos.model import Zonos
 from zonos.conditioning import make_cond_dict
 import tempfile
 import os
+import base64
+from db.db_models import Voices
 
 class SoundGenerator:
     def __init__(self, device: str = "cuda"):
@@ -13,11 +15,20 @@ class SoundGenerator:
         print("[DEBUG] Zonos 모델 로드 완료")
 
     # TTS 오디오 스트리밍
-    def tts_generator(self, ref_wav: str, text: str):
-        print(f"[DEBUG] tts_generator 호출됨. ref_wav={ref_wav}, text={text[:50]}...")
+    def tts_generator(self, db, text: str, voice_id: str):
+        print(f"[DEBUG] tts_generator 호출됨. voice_id={voice_id}, text={text[:50]}...")
 
-        # 화자 임베딩
-        wav, sampling_rate = torchaudio.load(ref_wav)
+        # 음성파일 불러오기
+        voice_record = db.query(Voices).filter(Voices.voice_id == voice_id).first()
+        if not voice_record:
+            raise FileNotFoundError(f"[ERROR] voice_id={voice_id} not found")
+
+        ref_wav_path = voice_record.voiceFile
+
+        if not os.path.exists(ref_wav_path):
+            raise FileNotFoundError(f"[ERROR] ref_wav not found: {ref_wav_path}")
+
+        wav, sampling_rate = torchaudio.load(ref_wav_path)
         speaker = self.model.make_speaker_embedding(wav, sampling_rate)
 
         # 조건 설정 (한국어)

@@ -5,7 +5,7 @@ import json, os, re
 from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
-from db.db_models import FairyTale, FairyTaleLog
+from db.db_models import FairyTale, FairyTaleLog, Voices
 from generate_story.generate_sound import SoundGenerator
 
 def _as_pages(contents: Union[List[str], str, bytes, None]) -> List[str]:
@@ -100,7 +100,7 @@ class StoryReader:
         uid: int,
         fid: int,
         page: int,
-        ref_wav: Optional[str] = "ref_audio.wav",
+        voice_id: Optional[str] = None, 
     ) -> StreamingResponse:
         ft = self._get_fairy_tale_or_404(db, uid, fid)
         pages = _as_pages(ft.contents)
@@ -147,26 +147,32 @@ class StoryReader:
             db.rollback()
             raise HTTPException(status_code=500, detail=f"log_update_failed: {e}")
 
-        # Zonos TTS 실시간 스트리밍
-        if not ref_wav or not os.path.isfile(ref_wav):  
-            raise HTTPException(status_code=400, detail=f"참조 오디오 파일 없음: {ref_wav}")
-        print(f"[DEBUG] Zonos TTS 스트리밍 시작. ref_wav={ref_wav}, 텍스트 길이={len(text)}")
+        # voice_id 기반 사용자 음성 파일 탐색
+        if not voice_id:
+            raise HTTPException(status_code=400, detail="voice_id가 필요합니다.")
+        print(f"[DEBUG] DB에서 voice_id={voice_id}로 음성 불러오기 시작")
+        
+        try:
+            tts_stream = self.sg.tts_generator(db=db, text=text, voice_id=voice_id)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"TTS 생성 실패: {e}")
+
+        # TTS 스트리밍 실행 - 등록된 음성 파일 or 기본 ref_wav 사용
         return StreamingResponse(
-            self.sg.tts_generator(ref_wav=ref_wav, text=text),
-            media_type="audio/wav",
+            tts_stream,
+            media_type="audio/wav", 
             headers={
-                "Content-Disposition": f'inline; filename="fid{fid}_page{page}.wav"',
+                "Content-Disposition": f'inline; filename=\"fid{fid}_page{page}.wav\"',
                 "X-Total-Pages": str(len(pages)),
                 "X-Current-Page": str(page),
             },
         )
 
-
     def _get_fairy_tale_or_404(self, db: Session, uid: int, fid: int) -> FairyTale:
         print(f"[DEBUG] _get_fairy_tale_or_404 호출됨. uid: {uid}, fid: {fid}")
         ft = (
             db.query(FairyTale)
-            .filter(FairyTale.fid == fid)
+            .filter((FairyTale.fid == fid) & ((FairyTale.uid == uid) | (FairyTale.uid == 0)))
             .first()
         )
         if not ft:
