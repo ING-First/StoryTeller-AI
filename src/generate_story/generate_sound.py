@@ -45,7 +45,9 @@ class SoundGenerator:
 
             # 파일 포맷 감지
             file_check = subprocess.run(["file", "-b", ref_wav_path], capture_output=True, text=True)
-            if "WebM" in file_check.stdout or "Opus" in file_check.stdout:
+            is_webm = "WebM" in file_check.stdout or "Opus" in file_check.stdout
+
+            if is_webm:
                 print("[DEBUG] WebM 형식 감지됨 → WAV로 변환 시작")
                 converted_path = ref_wav_path.replace(".wav", "_converted.wav")
                 subprocess.run([
@@ -93,7 +95,8 @@ class SoundGenerator:
             print("[DEBUG] 오디오 코드 생성 완료")
 
             # CPU로 이동 후 저장
-            output_path = os.path.join(tempfile.gettempdir(), "tts_output.wav")
+            output_filename = "tts_webM_output.wav" if is_webm else "tts_output.wav"
+            output_path = os.path.join(tempfile.gettempdir(), output_filename)
             audio = audio.cpu()
 
             # 텐서 차원 정리
