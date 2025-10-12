@@ -94,39 +94,35 @@ class SoundGenerator:
             audio = self.model.generate(conditioning)
             print("[DEBUG] 오디오 코드 생성 완료")
 
-            # CPU로 이동 후 저장
+            # CPU로 이동 후 저장 준비
             output_filename = "tts_webM_output.wav" if is_webm else "tts_output.wav"
             output_path = os.path.join(tempfile.gettempdir(), output_filename)
             audio = audio.cpu()
 
-            # 텐서 차원 정리
+            # 🔧 텐서 차원 정리 및 모노 변환
             if audio.dim() == 1:
                 audio = audio.unsqueeze(0)
             elif audio.dim() == 3:
                 audio = audio.squeeze(0)
 
-            audio = audio.squeeze()
-            if audio.dim() == 2 and audio.shape[0] > audio.shape[1]:
-                print(f"[DEBUG] 오디오 차원 전치 전: {audio.shape}")
-                audio = audio.T
-                print(f"[DEBUG] 오디오 차원 전치 후: {audio.shape}")
+            if audio.dim() > 1:
+                print(f"[DEBUG] 다채널 감지됨: {audio.shape} → 평균으로 모노 변환")
+                audio = audio.mean(dim=0)
 
-            # float32 변환 및 정규화
+            audio = audio.squeeze()
+
+            # 🔧 float32 변환 및 정규화
             audio = audio.to(torch.float32)
             max_val = torch.max(torch.abs(audio))
-            if max_val > 1:
+            if max_val > 1e-8:
                 audio = audio / max_val
-            print("[DEBUG] 오디오 정규화 완료")
+            print("[DEBUG] 오디오 정규화 및 모노 변환 완료")
 
-            # numpy 변환 및 mono 변환
-            audio_np = audio.numpy()
-            if audio_np.ndim > 1:
-                print(f"[DEBUG] 다채널 오디오 감지됨 → {audio_np.shape} → mono 변환 중")
-                audio_np = audio_np.mean(axis=1 if audio_np.shape[0] < audio_np.shape[1] else 0)
-                print(f"[DEBUG] 변환 후 오디오 shape: {audio_np.shape}")
+            # numpy 변환
+            audio_np = audio.cpu().numpy().astype("float32")
 
             # 파일로 저장
-            sf.write(output_path, audio_np.astype("float32"), 22050)
+            sf.write(output_path, audio_np, 22050)
             print(f"[DEBUG] 생성된 오디오 저장 완료: {output_path}")
 
             # 스트리밍 리턴
