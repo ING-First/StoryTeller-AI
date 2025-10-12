@@ -413,12 +413,18 @@ def tts_stream_page(uid: int = Body(...), pages: list[str] = Body(...), page: in
     if not voice_id:
         raise HTTPException(status_code=400, detail="등록된 음성이 없습니다.")
 
+    audio_stream = sg.tts_generator(db=db, voice_id=voice_id, text=text)  
+
     return StreamingResponse(
-        sg.tts_generator(voice_id=voice_id, text=text), 
-        media_type="audio/wav",
-        headers={"Content-Disposition": f'inline; filename="page{page}.wav"'}
+        audio_stream,
+        media_type="audio/wav",  
+        headers={
+            "Content-Disposition": f'inline; filename="page{page}.wav"',
+            "Cache-Control": "no-cache",  
+            "Access-Control-Allow-Origin": "*",
+        },
     )
-    
+        
 # Backend API: 나의 독서기록 조회
 @app.get("/users/{uid}/check_records", response_model=RecordCheckResponse)
 def check_records(uid: int, db: Session = Depends(get_db)):
