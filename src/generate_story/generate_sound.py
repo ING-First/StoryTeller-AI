@@ -5,7 +5,6 @@ from zonos.model import Zonos
 from zonos.conditioning import make_cond_dict
 import tempfile
 import os
-import base64
 from db.db_models import Voices
 import subprocess
 import traceback
@@ -13,14 +12,19 @@ import traceback
 class SoundGenerator:
     def __init__(self, device: str = "cuda"):
         self.device = device
+        print("[DEBUG] Zonos 모델 로드 중...")
         self.model = Zonos.from_pretrained("Zyphra/Zonos-v0.1-transformer", device=device)
+        print("[DEBUG] Zonos 모델 로드 완료")
 
         cwd = os.getcwd()
         ref_dir = os.path.join(cwd, "ref_voices")
+        print(f"[DEBUG] 현재 작업 디렉토리: {cwd}")
+        print(f"[DEBUG] ref_voices 경로: {ref_dir}")
 
     def tts_generator(self, db, text: str, voice_id: str):
-
         try:
+            print("[DEBUG] TTS 요청 시작")
+            
             # DB 조회
             voice_record = db.query(Voices).filter(Voices.voice_id == voice_id).first()
             print(f"[DEBUG] DB 조회 결과: {voice_record.voiceFile if voice_record else '없음'}")
@@ -35,7 +39,7 @@ class SoundGenerator:
             if not os.path.exists(ref_wav_path):
                 raise FileNotFoundError(f"[ERROR] ref_wav not found: {ref_wav_path}")
 
-            # DB 세션 조기 종료 
+            # DB 세션 종료
             db.expunge_all()
             db.close()
 
@@ -47,7 +51,7 @@ class SoundGenerator:
                 subprocess.run([
                     "ffmpeg", "-y",
                     "-i", ref_wav_path,
-                    "-ar", "22050", "-ac", "1", 
+                    "-ar", "22050", "-ac", "1",
                     converted_path
                 ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 ref_wav_path = converted_path
@@ -55,9 +59,9 @@ class SoundGenerator:
             else:
                 print("[DEBUG] WAV 파일로 확인됨 — 변환 불필요")
 
-            # 오디오 로드 및 디바이스 이동
+            # 오디오 로드
             wav, sampling_rate = torchaudio.load(ref_wav_path, backend="soundfile")
-            wav = wav.to(self.device)  
+            wav = wav.to(self.device)
             print("[DEBUG] wav 로드 및 디바이스 이동 완료")
 
             # 스피커 임베딩 생성
@@ -73,7 +77,7 @@ class SoundGenerator:
             conditioning = self.model.prepare_conditioning(cond_dict)
             print("[DEBUG] conditioning 생성 완료")
 
-            # conditioning을 GPU로 이동  
+            # conditioning을 GPU로 이동
             if isinstance(conditioning, dict):
                 conditioning = {
                     k: v.to(self.device) if torch.is_tensor(v) else v
@@ -83,7 +87,7 @@ class SoundGenerator:
                 conditioning = conditioning.to(self.device)
             print("[DEBUG] conditioning 디바이스 이동 완료")
 
-            # 오디오 생성 전체 try
+            # 오디오 생성
             print("[DEBUG] 오디오 코드 생성 시작")
             audio = self.model.generate(conditioning)
             print("[DEBUG] 오디오 코드 생성 완료")
@@ -92,32 +96,37 @@ class SoundGenerator:
             output_path = os.path.join(tempfile.gettempdir(), "tts_output.wav")
             audio = audio.cpu()
 
+            # 텐서 차원 정리
             if audio.dim() == 1:
                 audio = audio.unsqueeze(0)
             elif audio.dim() == 3:
                 audio = audio.squeeze(0)
 
-            # Zonos 출력 차원 정리
             audio = audio.squeeze()
             if audio.dim() == 2 and audio.shape[0] > audio.shape[1]:
-                # (channels, samples) 형태로 전치
                 print(f"[DEBUG] 오디오 차원 전치 전: {audio.shape}")
-                audio = audio.T 
+                audio = audio.T
                 print(f"[DEBUG] 오디오 차원 전치 후: {audio.shape}")
 
             # float32 변환 및 정규화
             audio = audio.to(torch.float32)
-            if torch.max(torch.abs(audio)) > 1:
-                audio = audio / torch.max(torch.abs(audio))  
+            max_val = torch.max(torch.abs(audio))
+            if max_val > 1:
+                audio = audio / max_val
+            print("[DEBUG] 오디오 정규화 완료")
 
-            # numpy 변환
+            # numpy 변환 및 mono 변환
             audio_np = audio.numpy()
+            if audio_np.ndim > 1:
+                print(f"[DEBUG] 다채널 오디오 감지됨 → {audio_np.shape} → mono 변환 중")
+                audio_np = audio_np.mean(axis=1 if audio_np.shape[0] < audio_np.shape[1] else 0)
+                print(f"[DEBUG] 변환 후 오디오 shape: {audio_np.shape}")
 
-            sf.write(output_path, audio_np, 22050)  
+            # 파일로 저장
+            sf.write(output_path, audio_np.astype("float32"), 22050)
             print(f"[DEBUG] 생성된 오디오 저장 완료: {output_path}")
 
-
-
+            # 스트리밍 리턴
             def audio_stream():
                 with open(output_path, "rb") as f:
                     while chunk := f.read(4096):
@@ -127,6 +136,5 @@ class SoundGenerator:
 
         except Exception as e:
             print("[ERROR] TTS 전체 과정 중 예외 발생:", e)
-            import traceback
             traceback.print_exc()
             raise
