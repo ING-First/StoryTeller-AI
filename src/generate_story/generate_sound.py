@@ -21,15 +21,22 @@ class SoundGenerator:
         # 음성파일 불러오기
         voice_record = db.query(Voices).filter(Voices.voice_id == voice_id).first()
         if not voice_record:
-            base_dir = os.path.dirname(os.path.abspath(__file__))
-            ref_wav_path = os.path.join(base_dir, "..", ref_wav_path)
-            ref_wav_path = os.path.normpath(ref_wav_path)
-            print(f"[DEBUG] 절대경로 보정 완료 → {ref_wav_path}")
+            raise FileNotFoundError(f"[ERROR] voice_id={voice_id} not found in DB")
 
         ref_wav_path = voice_record.voiceFile
 
+        if not os.path.isabs(ref_wav_path):
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            ref_wav_path = os.path.join(base_dir, "..", ref_wav_path)
+            ref_wav_path = os.path.normpath(ref_wav_path)
+            print(f"[DEBUG] 절대경로 보정 완료 → {ref_wav_path}")  
+        
         if not os.path.exists(ref_wav_path):
             raise FileNotFoundError(f"[ERROR] ref_wav not found: {ref_wav_path}")
+        
+        if os.path.getsize(ref_wav_path) < 1000:
+            raise FileNotFoundError(f"[ERROR] 음성 파일 손상됨 (크기 {os.path.getsize(ref_wav_path)}B): {ref_wav_path}")
+
 
         wav, sampling_rate = torchaudio.load(ref_wav_path)
         speaker = self.model.make_speaker_embedding(wav, sampling_rate)
