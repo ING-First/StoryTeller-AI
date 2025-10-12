@@ -13,6 +13,7 @@ ENV BNB_CUDA_VERSION=121
 RUN apt-get update && apt-get install -y \
     python3 python3-pip git curl wget \
     build-essential libssl-dev \
+    ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 # 작업 디렉토리
