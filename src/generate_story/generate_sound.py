@@ -21,7 +21,10 @@ class SoundGenerator:
         # 음성파일 불러오기
         voice_record = db.query(Voices).filter(Voices.voice_id == voice_id).first()
         if not voice_record:
-            raise FileNotFoundError(f"[ERROR] voice_id={voice_id} not found")
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            ref_wav_path = os.path.join(base_dir, "..", ref_wav_path)
+            ref_wav_path = os.path.normpath(ref_wav_path)
+            print(f"[DEBUG] 절대경로 보정 완료 → {ref_wav_path}")
 
         ref_wav_path = voice_record.voiceFile
 
