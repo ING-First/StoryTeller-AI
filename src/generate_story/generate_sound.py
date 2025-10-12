@@ -90,17 +90,33 @@ class SoundGenerator:
 
             # CPU로 이동 후 저장
             output_path = os.path.join(tempfile.gettempdir(), "tts_output.wav")
-            audio = audio.cpu() 
+            audio = audio.cpu()
 
             if audio.dim() == 1:
-                audio = audio.unsqueeze(0) 
+                audio = audio.unsqueeze(0)
             elif audio.dim() == 3:
                 audio = audio.squeeze(0)
-            if audio.dtype != torch.float32:
-                audio = audio.to(torch.float32)
 
-            sf.write(output_path, audio.squeeze(0).numpy(), 22050)
-            print(f"[DEBUG] 생성된 오디오 저장 완료: {output_path}")      
+            # Zonos 출력 차원 정리
+            audio = audio.squeeze()
+            if audio.dim() == 2 and audio.shape[0] > audio.shape[1]:
+                # (channels, samples) 형태로 전치
+                print(f"[DEBUG] 오디오 차원 전치 전: {audio.shape}")
+                audio = audio.T 
+                print(f"[DEBUG] 오디오 차원 전치 후: {audio.shape}")
+
+            # float32 변환 및 정규화
+            audio = audio.to(torch.float32)
+            if torch.max(torch.abs(audio)) > 1:
+                audio = audio / torch.max(torch.abs(audio))  
+
+            # numpy 변환
+            audio_np = audio.numpy()
+
+            sf.write(output_path, audio_np, 22050)  
+            print(f"[DEBUG] 생성된 오디오 저장 완료: {output_path}")
+
+
 
             def audio_stream():
                 with open(output_path, "rb") as f:
@@ -109,8 +125,8 @@ class SoundGenerator:
 
             return audio_stream()
 
-
         except Exception as e:
             print("[ERROR] TTS 전체 과정 중 예외 발생:", e)
+            import traceback
             traceback.print_exc()
             raise
