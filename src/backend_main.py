@@ -290,25 +290,13 @@ async def register_voice(uid: int = Form(...), audio: UploadFile = File(...), db
         save_dir = "ref_voices"
         os.makedirs(save_dir, exist_ok=True)
 
-        # 업로드 파일을 임시로 저장 
-        temp_path = os.path.join(save_dir, f"user_{uid}_{uuid.uuid4().hex[:8]}_raw.webm")
-        with open(temp_path, "wb") as f:
+        # 업로드 파일 저장 (WebM 그대로)
+        file_id = uuid.uuid4().hex[:8]
+        save_path = os.path.join(save_dir, f"user_{uid}_{file_id}.webm")
+
+        with open(save_path, "wb") as f:
             f.write(await audio.read())
-
-        # 변환 대상 및 최종 저장 경로 지정
-        final_path = temp_path.replace("_raw.webm", ".wav")
-
-        # ffmpeg로 변환 실행
-        subprocess.run([
-            "ffmpeg", "-y",
-            "-i", temp_path,
-            "-ar", "22050", "-ac", "1",
-            final_path
-        ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
-        # 임시 파일 삭제
-        if os.path.exists(temp_path):
-            os.remove(temp_path)
+        print(f"[DEBUG] 업로드된 음성 저장 완료 → {save_path}")
 
         # DB 저장
         voice_id = f"voice_{uid}_{uuid.uuid4().hex[:8]}"
@@ -316,7 +304,7 @@ async def register_voice(uid: int = Form(...), audio: UploadFile = File(...), db
             uid=uid,
             voice_id=voice_id,
             memo="",
-            voiceFile=final_path,
+            voiceFile=save_path,  
             createDate=date.today()
         )
         db.add(v)
@@ -325,7 +313,6 @@ async def register_voice(uid: int = Form(...), audio: UploadFile = File(...), db
 
         return {"message": "사용자 음성 등록 성공", "voice_id": voice_id}
 
-    
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"register_internal_error: {e}")
