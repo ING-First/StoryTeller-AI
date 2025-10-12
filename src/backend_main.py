@@ -42,6 +42,7 @@ security = HTTPBearer()
 SECRET_KEY = os.getenv("SECRET_KEY")
 ALGORITHM = os.getenv("ALGORITHM")
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES"))
+VOICE_PATH = os.getenv("VOICE_PATH")
 
 pattern = re.compile(r'^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*()_\-+=\[\]{}\\|;:\'",.<>/?`~])[A-Za-z\d!@#$%^&*()_\-+=\[\]{}\\|;:\'",.<>/?`~]{8,15}$')
 
@@ -287,7 +288,7 @@ def login(req: LoginRequest, db: Session = Depends(get_db)):
 @app.post("/voices/register", response_model=VoiceRegisterResponse) 
 async def register_voice(uid: int = Form(...), audio: UploadFile = File(...), db: Session = Depends(get_db)):
     try:
-        save_dir = "ref_voices"
+        save_dir = VOICE_PATH
         os.makedirs(save_dir, exist_ok=True)
 
         # 업로드 파일 저장 (WebM 그대로)
@@ -311,8 +312,8 @@ async def register_voice(uid: int = Form(...), audio: UploadFile = File(...), db
         db.commit()
         db.refresh(v)
 
-        return {"message": "사용자 음성 등록 성공", "voice_id": voice_id}
-
+        return {"message": "사용자 음성 등록 성공", "voice_id": voice_id} 
+    
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"register_internal_error: {e}")
@@ -323,50 +324,17 @@ def resume_reading(uid: int, fid: int, db: Session = Depends(get_db)):
     return ResumeResponse(**result)
 
 @app.post("/users/{uid}/fairy_tales/{fid}/read")
-async def read_page(uid: int, fid: int, request: Request, db: Session = Depends(get_db)):
-    try:
-        data = await request.json()
-    except Exception as e:
-        print(f"[DEBUG] JSON 파싱 실패: {e}")
-        raw = await request.body()
-        print(f"[DEBUG] Raw body: {raw}")
-        raise HTTPException(status_code=400, detail="Invalid JSON body")
-
-    # 안전하게 값 추출
-    page = data.get("page")
-    voice_id = data.get("voice_id")
-
-    if page is None:
-        raise HTTPException(status_code=400, detail="Missing 'page' in request body")
-    
-    print(f"[DEBUG] 요청된 voice_id: {voice_id}")
-
-    latest_voice = (
+def read_page(uid: int, fid: int, req: ReadRequest = Body(...), db: Session = Depends(get_db)):
+    v = (
         db.query(Voices)
         .filter(Voices.uid == uid)
-        .order_by(Voices.createDate.desc(), Voices.vid.desc())
+        .order_by(Voices.vid.desc())
         .first()
     )
-
-    if voice_id:
-        # 요청된 voice_id가 DB에 실제 존재하는지 확인
-        voice_record = db.query(Voices).filter(Voices.voice_id == voice_id).first()
-        if voice_record:
-            voice_id = voice_id
-            print(f"[DEBUG] 요청된 voice_id 유효 → {voice_id}")
-        else:
-            voice_id = getattr(latest_voice, "voice_id", None)
-    else:
-        # 요청에 voice_id 없을 경우 자동 최신 voice 사용
-        print(f"[DEBUG] voice_id 미입력됨 → 최신 사용자 음성 자동 탐색 uid={uid}")
-        voice_id = getattr(latest_voice, "voice_id", None)
-
-    # 최종 검증
+    voice_id = req.voice_id or getattr(v, "voice_id", None) 
     if not voice_id:
-        raise HTTPException(status_code=404, detail="등록된 음성이 없습니다. 먼저 음성을 생성해주세요.")
-    
-    print(f"[DEBUG] 최종 선택된 voice_id: {voice_id}")
-    return reader.stream_page(db, uid, fid, page=page, voice_id=voice_id)
+        raise HTTPException(status_code=400, detail="등록된 음성이 없습니다.")
+    return reader.stream_page(db, uid, fid, page=req.page, voice_id=voice_id) 
 
 @app.post("/users/{uid}/fairy_tales/{fid}/progress", response_model=UpdateReadingProgressResponse)
 def update_reading_progress(uid: int, fid: int, req: UpdateReadingProgressRequest = Body(...), db: Session = Depends(get_db)):
@@ -418,18 +386,12 @@ def tts_stream_page(uid: int = Body(...), pages: list[str] = Body(...), page: in
     if not voice_id:
         raise HTTPException(status_code=400, detail="등록된 음성이 없습니다.")
 
-    audio_stream = sg.tts_generator(db=db, voice_id=voice_id, text=text)  
-
     return StreamingResponse(
-        audio_stream,
-        media_type="audio/wav",  
-        headers={
-            "Content-Disposition": f'inline; filename="page{page}.wav"',
-            "Cache-Control": "no-cache",  
-            "Access-Control-Allow-Origin": "*",
-        },
+        sg.tts_generator(voice_id=voice_id, text=text), 
+        media_type="audio/wav",
+        headers={"Content-Disposition": f'inline; filename="page{page}.wav"'}
     )
-        
+    
 # Backend API: 나의 독서기록 조회
 @app.get("/users/{uid}/check_records", response_model=RecordCheckResponse)
 def check_records(uid: int, db: Session = Depends(get_db)):

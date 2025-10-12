@@ -11,6 +11,10 @@ ENV BNB_CUDA_VERSION=121
 RUN apt-get update && apt-get install -y \
     python3 python3-pip git curl wget \
     build-essential libssl-dev \
+    espeak-ng espeak-ng-data \
+    ffmpeg \
+    file \
+    libsndfile1 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -34,6 +38,7 @@ COPY . /app
 
 EXPOSE 8000 8001
 
+# 디렉토리 이동
 WORKDIR /app/src
 
 CMD ["python3", "start_server.py"]
