@@ -212,7 +212,7 @@ def join(req: UserRequest, db: Session = Depends(get_db)):
     existing = db.query(Users).filter(Users.id == req.id).first()
     if existing:
         raise HTTPException(status_code=400, detail="이미 존재하는 아이디입니다.")
-    
+    print(repr(req.passwd))
     # 비밀번호 해싱
     hashed_passwd = pwd_context.hash(req.passwd)
 
@@ -246,7 +246,16 @@ def verify_password(plain_password, hashed_password):
 def create_access_token(data: dict, expires_delta: timedelta = None):
     to_encode = data.copy()
     expire = datetime.utcnow() + (expires_delta or timedelta(minutes=15))
-    to_encode.update({"exp": expire})
+    # to_encode.update({"exp": expire})
+    uid = data.get("uid")
+    if uid is None:
+        raise ValueError("토큰 생성 시 uid가 누락되었습니다.")
+
+    to_encode.update({
+        "exp": expire,
+        "sub": str(uid)
+    })
+
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
 
@@ -264,7 +273,7 @@ def login(req: LoginRequest, db: Session = Depends(get_db)):
         raise HTTPException(status_code=401, detail="아이디 또는 비밀번호가 잘못되었습니다.")
     
     access_token = create_access_token(
-        data={"sub": user.uid},
+        data={"uid": user.uid},
         expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     )
 
@@ -656,33 +665,33 @@ def get_default_fairy_tales(db: Session = Depends(get_db)):
     DB에 저장된 모든 동화 목록을 가져오는 API (중복 제거)
     """
     fairy_tales_with_images = []
-
-    # FairyTale과 FairyTaleImages를 조인해서 각 동화별 첫 번째 이미지만 가져오기
-    tales_with_images = (
-        db.query(
-            FairyTale,
-            FairyTaleImages
-        )
-        .outerjoin(FairyTaleImages, FairyTale.fid == FairyTaleImages.fid)
-        .filter(FairyTale.uid == 0)  # uid가 0인 동화만 (기본 동화)
-        
-        .group_by(FairyTale.fid)  # fid 기준으로 그룹화 (중복 제거)
-        .order_by(FairyTale.fid, FairyTaleImages.image_id.asc())
+    
+    # 기본 동화 목록 가져오기
+    tales = (
+        db.query(FairyTale)
+        .filter(FairyTale.uid == 0)
+        .order_by(FairyTale.fid.asc())
         .all()
     )
 
-    for tale, image in tales_with_images:
+    # 동화에 대한 대표 이미지 하나 가져오기
+    for tale in tales:
         image_data = None
+        image = (
+            db.query(FairyTaleImages)
+            .filter(FairyTaleImages.fid == tale.fid)
+            .order_by(FairyTaleImages.image_id.asc())  # 첫 번째 이미지
+            .first()
+        )
+
         if image and image.file_name:
             full_image_path = f"{image.image_path}/{image.file_name}"
             if os.path.exists(full_image_path):
                 try:
                     with open(full_image_path, "rb") as image_file:
                         encoded = base64.b64encode(image_file.read()).decode()
-                        if image.file_name.lower().endswith('.png'):
-                            image_data = f"data:image/png;base64,{encoded}"
-                        else:
-                            image_data = f"data:image/jpeg;base64,{encoded}"
+                        ext = image.file_name.lower().split('.')[-1]
+                        image_data = f"data:image/{ext};base64,{encoded}"
                 except Exception as e:
                     print(f"Error encoding image: {e}")
                     image_data = None
@@ -694,7 +703,7 @@ def get_default_fairy_tales(db: Session = Depends(get_db)):
             "summary": tale.summary,
             "contents": tale.contents,
             "createDate": tale.createDate,
-            "image": image_data,  # base64 인코딩된 이미지
+            "image": image_data,
         })
 
     return {"data": fairy_tales_with_images}
@@ -705,23 +714,13 @@ def get_my_fairy_tales(
     db : Session = Depends(get_db),
     current_user: Users = Depends(get_current_user)
 ):
-    """
-        로그인한 사용자의 동화 목록만 가져오기 
-    """
     fairy_tales_with_images = []
-
     tales_with_images = (
         db.query(FairyTale, FairyTaleImages)
-        .outerjoin(FairyTaleImages, FairyTale.fid)
-        .filter(
-            or_(
-                FairyTale.uid == current_user.uid,
-                FairyTale.uid == 0
-            )
-        )
-
+        .outerjoin(FairyTaleImages, FairyTale.fid == FairyTaleImages.fid) 
+        .filter(or_(FairyTale.uid == current_user.uid, FairyTale.uid == 0))
         .group_by(FairyTale.fid)
-        .order_by(FairyTale.fid , FairyTaleImages.image_id.asc())
+        .order_by(FairyTale.fid, FairyTaleImages.image_id.asc())
         .all()
     )
 
@@ -730,16 +729,10 @@ def get_my_fairy_tales(
         if image and image.file_name:
             full_image_path = f"{image.image_path}/{image.file_name}"
             if os.path.exists(full_image_path):
-                try:
-                    with open(full_image_path, "rb") as image_file:
-                        encoded = base64.b64encode(image_file.read()).decode()
-                        if image.file_name.lower().endswith('.png'):
-                            image_data = f"data:image/png;base64,{encoded}"
-                        else:
-                            image_data = f"data:image/jpeg;base64,{encoded}"
-                except Exception as e:
-                    print(f"Error encoding image: {e}")
-                    image_data = None
+                with open(full_image_path, "rb") as image_file:
+                    encoded = base64.b64encode(image_file.read()).decode()
+                    ext = "png" if image.file_name.lower().endswith(".png") else "jpeg"
+                    image_data = f"data:image/{ext};base64,{encoded}"
 
         fairy_tales_with_images.append({
             "fid": tale.fid,

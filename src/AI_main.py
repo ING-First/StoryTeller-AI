@@ -121,7 +121,7 @@ def generate_story(req: GenerateStoryRequest, db: Session = Depends(get_db), str
             db.rollback()
             logging.error(f"Database error: {str(e)}", exc_info=True)
 
-        story = db.query(FairyTale).filter(FairyTale.title == result['title']).first()
+        story = ft
 
         if stream:
             def generate_pages():
