@@ -10,11 +10,10 @@ class SoundGenerator:
     def __init__(self, device: str = "cuda"):
         self.device = device
         print("[DEBUG] Zonos 모델 로드 중...")
-        self.model = Zonos.from_pretrained("Zyphra/Zonos-v0.1-transformer", device=device)  # 수정됨
+        self.model = Zonos.from_pretrained("Zyphra/Zonos-v0.1-transformer", device=device)
         print("[DEBUG] Zonos 모델 로드 완료")
 
     def _ensure_wav_pcm16_mono_22050(self, wav, sr):
-        """WAV 형식 통일 보조 함수"""
         if wav.ndim > 1:
             wav = wav.mean(dim=0, keepdim=True)
         if sr != 22050:
@@ -27,21 +26,22 @@ class SoundGenerator:
 
             # DB 조회
             voice_record = db.query(Voices).filter(Voices.voice_id == voice_id).first()
-            print(f"[DEBUG] DB 조회 결과: {voice_record.voiceFile if voice_record else '없음'}")
             if not voice_record:
                 raise FileNotFoundError(f"[ERROR] DB에 voice_id={voice_id} 해당 음성이 없습니다.")
 
-            ref_wav_path = voice_record.voiceFile
-            if not os.path.isabs(ref_wav_path):
-                base_dir = os.path.dirname(os.path.abspath(__file__))
-                ref_wav_path = os.path.normpath(os.path.join(base_dir, "..", ref_wav_path))
+            print(f"[DEBUG] DB 조회 결과: {voice_record.voiceFile}")
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            ref_wav_path = os.path.normpath(os.path.join(base_dir, "..", voice_record.voiceFile))
 
             if not os.path.exists(ref_wav_path):
-                raise FileNotFoundError(f"[ERROR] ref_wav not found: {ref_wav_path}")
+                raise FileNotFoundError(f"[ERROR] 원본 파일 없음: {ref_wav_path}")
 
-            # DB 세션 정리
-            db.expunge_all()
-            db.close()
+            # 🔹 DB 경로 기반으로 ref_audio 저장 경로 자동 생성
+            ref_audio_relpath = voice_record.voiceFile.replace("ref_voices", "ref_audio").replace(".webm", "_converted.wav")
+            ref_audio_path = os.path.normpath(os.path.join(base_dir, "..", ref_audio_relpath))
+            os.makedirs(os.path.dirname(ref_audio_path), exist_ok=True)
+
+            print(f"[DEBUG] 변환 후 저장 경로: {ref_audio_path}")
 
             # 파일 포맷 감지
             file_check = subprocess.run(["file", "-b", ref_wav_path], capture_output=True, text=True)
@@ -49,22 +49,28 @@ class SoundGenerator:
 
             if is_webm:
                 print("[DEBUG] WebM/Opus 형식 감지 → WAV로 변환(ffmpeg)")
-                converted_path = ref_wav_path.replace(".wav", "_converted.wav")
-                subprocess.run(
-                    ["ffmpeg", "-y", "-i", ref_wav_path, "-ar", "22050", "-ac", "1", converted_path],
-                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-                )
-                ref_wav_path = converted_path
-                print(f"[DEBUG] 변환 완료: {ref_wav_path}")
+                subprocess.run([
+                    "ffmpeg", "-y",
+                    "-i", ref_wav_path,
+                    "-ar", "22050",
+                    "-ac", "1",
+                    "-acodec", "pcm_s16le",
+                    ref_audio_path
+                ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                ref_wav_path = ref_audio_path
+                print(f"[DEBUG] 변환 완료: {ref_audio_path}")
             else:
                 print("[DEBUG] WAV 파일로 확인됨 — 변환 불필요")
+                if ref_wav_path != ref_audio_path:
+                    subprocess.run(["cp", ref_wav_path, ref_audio_path])
+                    print(f"[DEBUG] WAV 복사 완료: {ref_audio_path}")
+                ref_wav_path = ref_audio_path
 
             # 오디오 로드
             wav, sampling_rate = torchaudio.load(ref_wav_path, backend="soundfile")
             wav = wav.to(self.device)
             print(f"[DEBUG] 입력 wav 로드 완료: shape={tuple(wav.shape)}, sr={sampling_rate}")
 
-            # 입력 음성 정규화
             wav, sampling_rate = self._ensure_wav_pcm16_mono_22050(wav, sampling_rate)
             print(f"[DEBUG] 입력 wav 정규화 완료: shape={tuple(wav.shape)}, sr={sampling_rate}")
 
@@ -77,23 +83,23 @@ class SoundGenerator:
             conditioning = self.model.prepare_conditioning(cond_dict)
             print("[DEBUG] conditioning 생성 완료")
 
-            # conditioning을 GPU로 이동
             if isinstance(conditioning, dict):
                 conditioning = {k: v.to(self.device) if torch.is_tensor(v) else v for k, v in conditioning.items()}
 
-            # 🔹 오디오 코드 생성
             print("[DEBUG] 오디오 코드 생성 시작") 
             codes = self.model.generate(conditioning)  
             print("[DEBUG] 오디오 코드 생성 완료") 
 
-            # 🔹 오디오 복원 (디코딩)
             print("[DEBUG] 디코딩 시작")  
             wavs = self.model.autoencoder.decode(codes).cpu() 
             print("[DEBUG] 디코딩 완료") 
 
             # 출력 저장
-            torchaudio.save("/tmp/tts_output.wav", wavs[0], self.model.autoencoder.sampling_rate)
-            return open("/tmp/tts_output.wav", "rb")
+            tts_output_path = "/tmp/tts_output.wav"
+            torchaudio.save(tts_output_path, wavs[0], self.model.autoencoder.sampling_rate)
+            print(f"[DEBUG] TTS 결과 저장 완료: {tts_output_path}")
+
+            return open(tts_output_path, "rb")
 
         except Exception as e:
             print(f"[ERROR] TTS 전체 과정 중 예외 발생: {e}")
