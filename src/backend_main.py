@@ -102,7 +102,7 @@ async def pre_generate_fairy_tale_audio(db: Session, uid: int, voice_id: str):
                 continue
 
             try:
-                print(f"[DEBUG] 🔊 ({tale.title}) page {i + 1} 생성 중...")
+                print(f"[DEBUG] ({tale.title}) page {i + 1} 생성 중...")
                 audio_iter = sg.tts_generator(voice_id=voice_id, text=text)
                 async with aiofiles.open(page_path, "wb") as f:
                     async for chunk in audio_iter:
@@ -427,7 +427,7 @@ def read_page(uid: int, fid: int, req: ReadRequest = Body(...), db: Session = De
     
     print("[WARN] 캐시된 음성이 없어 실시간 생성 수행")
     return StreamingResponse(
-        sg.tts_generator(voice_id=voice_id, text=f"page {req.page}"),
+        sg.tts_generator(db=db, voice_id=voice_id, text=f"page {req.page}"),
         media_type="audio/wav",
         headers={"Content-Disposition": f'inline; filename=\"page{req.page}.wav\"'}
     )
@@ -459,34 +459,6 @@ def update_reading_progress(uid: int, fid: int, req: UpdateReadingProgressReques
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"진행도 업데이트 실패: {e}")
-
-
-@app.post("/tts/stream_page")
-def tts_stream_page(uid: int = Body(...), pages: list[str] = Body(...), page: int = Body(...), db: Session = Depends(get_db)):
-    if not pages:
-        raise HTTPException(status_code=400, detail="pages_required")
-    if page < 1 or page > len(pages):
-        raise HTTPException(status_code=400, detail=f"invalid_page_number: 1..{len(pages)}")
-
-    text = (pages[page - 1] or "").strip()
-    if not text:
-        raise HTTPException(status_code=400, detail="empty_page_text")
-
-    v = (
-        db.query(Voices)
-        .filter(Voices.uid == uid)
-        .order_by(Voices.vid.desc())
-        .first()
-    )
-    voice_id = getattr(v, "voice_id", None) if v else None  
-    if not voice_id:
-        raise HTTPException(status_code=400, detail="등록된 음성이 없습니다.")
-
-    return StreamingResponse(
-        sg.tts_generator(voice_id=voice_id, text=text), 
-        media_type="audio/wav",
-        headers={"Content-Disposition": f'inline; filename="page{page}.wav"'}
-    )
     
 # Backend API: 나의 독서기록 조회
 @app.get("/users/{uid}/check_records", response_model=RecordCheckResponse)
