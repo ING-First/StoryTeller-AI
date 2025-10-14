@@ -330,6 +330,18 @@ async def register_voice(uid: int = Form(...), audio: UploadFile = File(...), db
         except subprocess.CalledProcessError as e:
             print(f"[FFPROBE ERROR] {e.output.decode(errors='ignore')}")
 
+        # WAV 변환
+        wav_path = save_path.replace(ext, ".wav")
+        try:
+            subprocess.run([
+                "ffmpeg", "-y",
+                "-i", save_path,
+                "-ar", "22050", "-ac", "1", "-c:a", "pcm_s16le", wav_path
+            ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
+            print(f"[DEBUG] 변환 성공 → {wav_path}")
+        except subprocess.CalledProcessError:
+            print("[WARN] ffmpeg 변환 실패 (파일 손상 가능성 있음)")
+
         # DB 저장
         voice_id = f"voice_{uid}_{uuid.uuid4().hex[:8]}"
         voice_record = Voices(
