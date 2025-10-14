@@ -5,7 +5,7 @@ import torch
 import os
 
 class ImageGenerator:
-    def __init__(self, pre_trained_model_name="Bingsu/my-korean-stable-diffusion-v1-5"):
+    def __init__(self, fid, pre_trained_model_name="Bingsu/my-korean-stable-diffusion-v1-5"):
         dotenv_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
         load_dotenv(dotenv_path)
         
@@ -13,6 +13,7 @@ class ImageGenerator:
         self.dtype = torch.float16 if self.device == "cuda" else torch.float32
         self.pre_trained_model_name = pre_trained_model_name
         self.lora_scale = 0.9
+        self.fid = fid
 
         BASE_DIR = Path(__file__).resolve().parent.parent
         self.lora_path = BASE_DIR.parent / "models" / "lora-diffusion-weight"
@@ -58,7 +59,7 @@ class ImageGenerator:
             count = len(os.listdir(os.path.join(self.save_path, title))) + 1
 
             image_path = os.path.join(self.save_path, title)
-            file_name = f"{title}_{str(count).zfill(6)}.png"
+            file_name = f"{self.fid}_{title}_{str(count).zfill(6)}.png"
 
             pipeline_output.images[0].save(os.path.join(image_path, file_name))
 
