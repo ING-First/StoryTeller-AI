@@ -285,35 +285,78 @@ def login(req: LoginRequest, db: Session = Depends(get_db)):
         access_token=access_token, 
         token_type="bearer")
 
-@app.post("/voices/register", response_model=VoiceRegisterResponse) 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))  
+VOICE_PATH = os.path.join(BASE_DIR, "ref_voices")
+
+@app.post("/voices/register")
 async def register_voice(uid: int = Form(...), audio: UploadFile = File(...), db: Session = Depends(get_db)):
     try:
-        save_dir = VOICE_PATH
-        os.makedirs(save_dir, exist_ok=True)
+        os.makedirs(VOICE_PATH, exist_ok=True)
 
-        # 업로드 파일 저장 (WebM 그대로)
+        # 업로드된 MIME 타입 로깅
+        ct = (audio.content_type or "").lower()
+        print(f"[DEBUG] 업로드된 content_type = {ct}")
+
+        # 확장자 자동 결정
+        ext = ".webm"
+        if "mp4" in ct or "m4a" in ct:
+            ext = ".m4a"
+
         file_id = uuid.uuid4().hex[:8]
-        save_path = os.path.join(save_dir, f"user_{uid}_{file_id}.webm")
+        save_path = os.path.join(VOICE_PATH, f"user_{uid}_{file_id}{ext}")
 
+        # 청크 단위 저장 
         with open(save_path, "wb") as f:
-            f.write(await audio.read())
-        print(f"[DEBUG] 업로드된 음성 저장 완료 → {save_path}")
+            while True:
+                chunk = await audio.read(1024 * 1024)
+                if not chunk:
+                    break
+                f.write(chunk)
+
+        size = os.path.getsize(save_path)
+        print(f"[DEBUG] 파일 저장 완료 → {save_path} ({size} bytes)")
+
+        # ffprobe로 파일 상태 검사
+        try:
+            out = subprocess.check_output(
+                [
+                    "ffprobe", "-v", "error",
+                    "-show_entries", "stream=codec_name,codec_type,duration",
+                    "-of", "json", save_path
+                ],
+                stderr=subprocess.STDOUT
+            ).decode()
+            print(f"[FFPROBE] {save_path} -> {out}")
+        except subprocess.CalledProcessError as e:
+            print(f"[FFPROBE ERROR] {e.output.decode(errors='ignore')}")
+
+        # WAV 변환
+        wav_path = save_path.replace(ext, ".wav")
+        try:
+            subprocess.run([
+                "ffmpeg", "-y",
+                "-i", save_path,
+                "-ar", "22050", "-ac", "1", "-c:a", "pcm_s16le", wav_path
+            ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
+            print(f"[DEBUG] 변환 성공 → {wav_path}")
+        except subprocess.CalledProcessError:
+            print("[WARN] ffmpeg 변환 실패 (파일 손상 가능성 있음)")
 
         # DB 저장
         voice_id = f"voice_{uid}_{uuid.uuid4().hex[:8]}"
-        v = Voices(
+        voice_record = Voices(
             uid=uid,
             voice_id=voice_id,
             memo="",
-            voiceFile=save_path,  
+            voiceFile=save_path,
             createDate=date.today()
         )
-        db.add(v)
+        db.add(voice_record)
         db.commit()
-        db.refresh(v)
+        db.refresh(voice_record)
 
-        return {"message": "사용자 음성 등록 성공", "voice_id": voice_id} 
-    
+        return {"message": "사용자 음성 등록 성공", "voice_id": voice_id}
+
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"register_internal_error: {e}")
