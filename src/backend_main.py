@@ -15,6 +15,8 @@ from jose import jwt, JWTError
 from dotenv import load_dotenv
 import subprocess
 import uuid
+import asyncio  
+import aiofiles
 
 from generate_story.generate_sound import SoundGenerator
 import os
@@ -75,6 +77,40 @@ def get_current_user(
     if user is None:
         raise HTTPException(status_code=404, detail="User not found")
     return user
+
+async def pre_generate_fairy_tale_audio(db: Session, uid: int, voice_id: str):
+    # 페이지별 음성 파일 미리 생성
+    tales = db.query(FairyTale).filter(or_(FairyTale.uid == 0, FairyTale.uid == uid)).all()
+    tts_root = os.path.join(VOICE_PATH, "tts_cache", str(uid))
+    os.makedirs(tts_root, exist_ok=True)
+
+    print(f"[DEBUG] 총 {len(tales)}개의 동화에 대해 음성 파일을 미리 생성합니다...")
+
+    for tale in tales:
+        tale_dir = os.path.join(tts_root, str(tale.fid))
+        os.makedirs(tale_dir, exist_ok=True)
+
+        # 문장 단위로 나누기
+        sentences = re.split(r'(?<=[.!?])\s+', tale.contents.strip())
+        for i, text in enumerate(sentences):
+            if not text.strip():
+                continue
+            page_path = os.path.join(tale_dir, f"page_{i + 1}.wav")
+
+            # 이미 존재하면 스킵
+            if os.path.exists(page_path):
+                continue
+
+            try:
+                print(f"[DEBUG] 🔊 ({tale.title}) page {i + 1} 생성 중...")
+                audio_iter = sg.tts_generator(voice_id=voice_id, text=text)
+                async with aiofiles.open(page_path, "wb") as f:
+                    async for chunk in audio_iter:
+                        await f.write(chunk)
+                print(f"[DEBUG] 생성 완료 → {page_path}")
+            except Exception as e:
+                print(f"[ERROR] TTS 실패 (fid={tale.fid}, page={i + 1}) - {e}")
+                continue
 
 class VoiceRegisterResponse(BaseModel): 
     message: str
@@ -185,6 +221,10 @@ class UpdateReadingProgressRequest(BaseModel):
 class UpdateReadingProgressResponse(BaseModel):
     message: str
     page: int
+
+class ReadRequest(BaseModel):
+    page: int
+    voice_id: Optional[str] = None
 
 # 회원가입 API
 @app.post("/join", response_model=UserResponse)
@@ -355,6 +395,8 @@ async def register_voice(uid: int = Form(...), audio: UploadFile = File(...), db
         db.commit()
         db.refresh(voice_record)
 
+        asyncio.create_task(pre_generate_fairy_tale_audio(db, uid, voice_id))
+        
         return {"message": "사용자 음성 등록 성공", "voice_id": voice_id}
 
     except Exception as e:
@@ -377,7 +419,18 @@ def read_page(uid: int, fid: int, req: ReadRequest = Body(...), db: Session = De
     voice_id = req.voice_id or getattr(v, "voice_id", None) 
     if not voice_id:
         raise HTTPException(status_code=400, detail="등록된 음성이 없습니다.")
-    return reader.stream_page(db, uid, fid, page=req.page, voice_id=voice_id) 
+    
+    tts_file = os.path.join(VOICE_PATH, "tts_cache", str(uid), str(fid), f"page_{req.page}.wav")
+    if os.path.exists(tts_file):
+        print(f"[DEBUG] 캐시된 음성 반환: {tts_file}")
+        return StreamingResponse(open(tts_file, "rb"), media_type="audio/wav")
+    
+    print("[WARN] 캐시된 음성이 없어 실시간 생성 수행")
+    return StreamingResponse(
+        sg.tts_generator(voice_id=voice_id, text=f"page {req.page}"),
+        media_type="audio/wav",
+        headers={"Content-Disposition": f'inline; filename=\"page{req.page}.wav\"'}
+    )
 
 @app.post("/users/{uid}/fairy_tales/{fid}/progress", response_model=UpdateReadingProgressResponse)
 def update_reading_progress(uid: int, fid: int, req: UpdateReadingProgressRequest = Body(...), db: Session = Depends(get_db)):
