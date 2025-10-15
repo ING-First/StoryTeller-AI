@@ -358,7 +358,7 @@ async def register_voice(
         elif "ogg" in ct or "vorbis" in ct:
             ext = ".ogg"
         else:
-            ext = ".wav"  # 예외 케이스 기본값
+            ext = ".wav" 
 
         # 저장 파일명 생성
         file_id = uuid.uuid4().hex[:8]
@@ -485,15 +485,15 @@ def read_page(
     if req.page < 1 or req.page > len(pages):
         raise HTTPException(status_code=400, detail="페이지 번호가 잘못되었습니다.")
 
-    text = sentences[req.page - 1]
+    text = pages[req.page - 1]
 
     try:
         with open(cached_path, "wb") as f:
             for chunk in sg.tts_generator(db=db, text=text, voice_id=voice_id):
                 f.write(chunk)
-        print(f"[DEBUG] ✅ 새 음성 생성 완료 → {cached_path}")
+        print(f"[DEBUG] 새 음성 생성 완료 → {cached_path}")
     except Exception as e:
-        print(f"[ERROR] ⚠️ 새 음성 생성 실패: {e}")
+        print(f"[ERROR] 새 음성 생성 실패: {e}")
         raise HTTPException(status_code=500, detail="TTS 생성 실패")
 
     def iterfile():
