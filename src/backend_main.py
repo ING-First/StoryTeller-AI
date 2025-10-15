@@ -303,44 +303,31 @@ async def register_voice(uid: int = Form(...), audio: UploadFile = File(...), db
             ext = ".m4a"
 
         file_id = uuid.uuid4().hex[:8]
-        save_path = os.path.join(VOICE_PATH, f"user_{uid}_{file_id}{ext}")
+        base_filename = f"user_{uid}_{file_id}"
+        temp_save_path = os.path.join(VOICE_PATH, f"{base_filename}{ext}")
 
         # 청크 단위 저장 
-        with open(save_path, "wb") as f:
+        with open(temp_save_path, "wb") as f:
             while True:
                 chunk = await audio.read(1024 * 1024)
                 if not chunk:
                     break
                 f.write(chunk)
+        print(f"[DEBUG] 업로드 파일 저장 완료 → {temp_save_path}")
 
-        size = os.path.getsize(save_path)
-        print(f"[DEBUG] 파일 저장 완료 → {save_path} ({size} bytes)")
+        wav_path = os.path.join(VOICE_PATH, f"{base_filename}.wav")
 
         # ffprobe로 파일 상태 검사
         try:
-            out = subprocess.check_output(
-                [
-                    "ffprobe", "-v", "error",
-                    "-show_entries", "stream=codec_name,codec_type,duration",
-                    "-of", "json", save_path
-                ],
-                stderr=subprocess.STDOUT
-            ).decode()
-            print(f"[FFPROBE] {save_path} -> {out}")
-        except subprocess.CalledProcessError as e:
-            print(f"[FFPROBE ERROR] {e.output.decode(errors='ignore')}")
-
-        # WAV 변환
-        wav_path = save_path.replace(ext, ".wav")
-        try:
             subprocess.run([
                 "ffmpeg", "-y",
-                "-i", save_path,
+                "-i", temp_save_path,
                 "-ar", "22050", "-ac", "1", "-c:a", "pcm_s16le", wav_path
             ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
             print(f"[DEBUG] 변환 성공 → {wav_path}")
-        except subprocess.CalledProcessError:
-            print("[WARN] ffmpeg 변환 실패 (파일 손상 가능성 있음)")
+        except subprocess.CalledProcessError as e:
+            print(f"[ERROR] ffmpeg 변환 실패: {e}")
+            raise HTTPException(status_code=500, detail="음성 변환 중 오류 발생")
 
         # DB 저장
         voice_id = f"voice_{uid}_{uuid.uuid4().hex[:8]}"
@@ -348,17 +335,19 @@ async def register_voice(uid: int = Form(...), audio: UploadFile = File(...), db
             uid=uid,
             voice_id=voice_id,
             memo="",
-            voiceFile=save_path,
+            voiceFile=wav_path,    
             createDate=date.today()
         )
         db.add(voice_record)
         db.commit()
         db.refresh(voice_record)
 
+        print(f"[DEBUG] DB 저장 완료 → voice_id={voice_id}")
         return {"message": "사용자 음성 등록 성공", "voice_id": voice_id}
-
+    
     except Exception as e:
         db.rollback()
+        print(f"[ERROR] register_voice 내부 예외 발생: {e}")
         raise HTTPException(status_code=500, detail=f"register_internal_error: {e}")
 
 @app.get("/users/{uid}/fairy_tales/{fid}/resume", response_model=ResumeResponse)
@@ -430,7 +419,7 @@ def tts_stream_page(uid: int = Body(...), pages: list[str] = Body(...), page: in
         raise HTTPException(status_code=400, detail="등록된 음성이 없습니다.")
 
     return StreamingResponse(
-        sg.tts_generator(voice_id=voice_id, text=text), 
+        sg.tts_generator(db=db, text=text, voice_id=voice_id),
         media_type="audio/wav",
         headers={"Content-Disposition": f'inline; filename="page{page}.wav"'}
     )

@@ -43,28 +43,7 @@ class SoundGenerator:
 
             print(f"[DEBUG] 변환 후 저장 경로: {ref_audio_path}")
 
-            # 파일 포맷 감지
-            file_check = subprocess.run(["file", "-b", ref_wav_path], capture_output=True, text=True)
-            is_webm = "WebM" in file_check.stdout or "Opus" in file_check.stdout
-
-            if is_webm:
-                print("[DEBUG] WebM/Opus 형식 감지 → WAV로 변환(ffmpeg)")
-                subprocess.run([
-                    "ffmpeg", "-y",
-                    "-i", ref_wav_path,
-                    "-ar", "22050",
-                    "-ac", "1",
-                    "-acodec", "pcm_s16le",
-                    ref_audio_path
-                ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                ref_wav_path = ref_audio_path
-                print(f"[DEBUG] 변환 완료: {ref_audio_path}")
-            else:
-                print("[DEBUG] WAV 파일로 확인됨 — 변환 불필요")
-                if ref_wav_path != ref_audio_path:
-                    subprocess.run(["cp", ref_wav_path, ref_audio_path])
-                    print(f"[DEBUG] WAV 복사 완료: {ref_audio_path}")
-                ref_wav_path = ref_audio_path
+            
 
             # 오디오 로드
             wav, sampling_rate = torchaudio.load(ref_wav_path, backend="soundfile")
