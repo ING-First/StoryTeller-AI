@@ -15,6 +15,8 @@ from jose import jwt, JWTError
 from dotenv import load_dotenv
 import subprocess
 import uuid
+import asyncio
+import aiofiles
 
 from generate_story.generate_sound import SoundGenerator
 import os
@@ -75,6 +77,51 @@ def get_current_user(
     if user is None:
         raise HTTPException(status_code=404, detail="User not found")
     return user
+
+async def pre_generate_fairy_tale_audio(uid: int, voice_id: str):
+    """사용자의 모든 동화에 대해 페이지별 TTS 음성을 비동기 생성"""
+    db = SessionLocal()
+    try:
+        tales = db.query(FairyTale).filter(or_(FairyTale.uid == 0, FairyTale.uid == uid)).all()
+        if not tales:
+            print(f"[INFO] uid={uid} 사용자의 동화 데이터가 없습니다.")
+            return
+
+        tts_root = os.path.join(GENERATED_PATH, str(uid))
+        os.makedirs(tts_root, exist_ok=True)
+
+        print(f"[DEBUG] {len(tales)}개의 동화에 대해 음성 파일을 미리 생성합니다...")
+
+        for tale in tales:
+            tale_dir = os.path.join(tts_root, str(tale.fid))
+            os.makedirs(tale_dir, exist_ok=True)
+
+            # 페이지 단위로 텍스트 분리
+            sentences = re.split(r'(?<=[.!?])\s+', tale.contents.strip())
+            for i, text in enumerate(sentences):
+                if not text.strip():
+                    continue
+
+                page_path = os.path.join(tale_dir, f"page_{i + 1}.wav")
+                if os.path.exists(page_path):
+                    print(f"[SKIP] {tale.title} page {i+1} → 이미 존재함")
+                    continue
+
+                try:
+                    print(f"[DEBUG] 🔊 {tale.title} page {i+1} 생성 중...")
+                    async with aiofiles.open(page_path, "wb") as f:
+                        async for chunk in sg.tts_generator(voice_id=voice_id, text=text):
+                            await f.write(chunk)
+                    print(f"[DEBUG] ✅ 생성 완료 → {page_path}")
+                except Exception as e:
+                    print(f"[ERROR] ❌ TTS 실패 (fid={tale.fid}, page={i + 1}) - {e}")
+                    continue
+
+        print(f"[INFO] ✅ uid={uid}의 모든 동화 음성 사전 생성 완료")
+    except Exception as e:
+        print(f"[ERROR] pre_generate_fairy_tale_audio 예외 발생: {e}")
+    finally:
+        db.close()
 
 class VoiceRegisterResponse(BaseModel): 
     message: str
@@ -287,6 +334,7 @@ def login(req: LoginRequest, db: Session = Depends(get_db)):
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))  
 VOICE_PATH = os.path.join(BASE_DIR, "ref_voices")
+GENERATED_PATH = os.path.join(BASE_DIR, "generated_voices")
 
 @app.post("/voices/register")
 async def register_voice(
@@ -294,11 +342,7 @@ async def register_voice(
     audio: UploadFile = File(...),
     db: Session = Depends(get_db)
 ):
-    """
-    사용자 음성 등록 API
-    - 브라우저별 업로드 포맷(webm/mp4/ogg/m4a)을 모두 지원
-    - ffmpeg 변환 후 wav 파일을 저장 및 DB 등록
-    """
+    
     try:
         os.makedirs(VOICE_PATH, exist_ok=True)
 
@@ -373,12 +417,18 @@ async def register_voice(
         db.commit()
         db.refresh(voice_record)
 
-        print(f"[DEBUG] DB 저장 완료 → voice_id={voice_id}")
-        return {"message": "사용자 음성 등록 성공", "voice_id": voice_id}
+        print(f"[DEBUG] DB 저장 완료 → voice_id={voice_id}")    
+        asyncio.create_task(pre_generate_fairy_tale_audio(uid, voice_id))
+        return {"message": "사용자 음성 등록 성공 (TTS 백그라운드 생성 중)", "voice_id": voice_id}
 
+
+    except subprocess.CalledProcessError as e:
+        db.rollback()
+        print(f"[ERROR] ffmpeg 변환 실패: {e}")
+        raise HTTPException(status_code=500, detail="음성 변환 실패")
     except Exception as e:
         db.rollback()
-        print(f"[ERROR] register_voice 내부 예외 발생: {e}")
+        print(f"[ERROR] register_voice 내부 예외: {e}")
         raise HTTPException(status_code=500, detail=f"register_internal_error: {e}")
 
 @app.get("/users/{uid}/fairy_tales/{fid}/resume", response_model=ResumeResponse)
@@ -387,17 +437,69 @@ def resume_reading(uid: int, fid: int, db: Session = Depends(get_db)):
     return ResumeResponse(**result)
 
 @app.post("/users/{uid}/fairy_tales/{fid}/read")
-def read_page(uid: int, fid: int, req: ReadRequest = Body(...), db: Session = Depends(get_db)):
+def read_page(
+    uid: int,
+    fid: int,
+    req: ReadRequest = Body(...),
+    db: Session = Depends(get_db)
+):
+    # 사용자 음성 조회
     v = (
         db.query(Voices)
         .filter(Voices.uid == uid)
         .order_by(Voices.vid.desc())
         .first()
     )
-    voice_id = req.voice_id or getattr(v, "voice_id", None) 
+    voice_id = req.voice_id or getattr(v, "voice_id", None)
     if not voice_id:
         raise HTTPException(status_code=400, detail="등록된 음성이 없습니다.")
-    return reader.stream_page(db, uid, fid, page=req.page, voice_id=voice_id) 
+
+    # 캐싱된 파일 경로
+    base_dir = os.path.join("generated_voices", str(uid), str(fid))
+    os.makedirs(base_dir, exist_ok=True)
+    cached_path = os.path.join(base_dir, f"page_{req.page}.wav")
+
+    # 캐시된 파일이 존재하면 그대로 반환
+    if os.path.exists(cached_path) and os.path.getsize(cached_path) > 0:
+        print(f"[DEBUG] 🎵 캐싱된 파일 재생: {cached_path}")
+        def iterfile():
+            with open(cached_path, "rb") as f:
+                yield from f
+        return StreamingResponse(iterfile(), media_type="audio/wav")
+
+    # 캐시 파일이 없으면 새로 생성
+    print(f"[DEBUG] 캐싱된 파일 없음 → 새로 생성 중...")
+    # 페이지 텍스트 불러오기
+    tale = db.query(FairyTale).filter(FairyTale.fid == fid).first()
+    if not tale:
+        raise HTTPException(status_code=404, detail="해당 동화를 찾을 수 없습니다.")
+
+    # 페이지별 텍스트 분리
+    sentences = re.split(r'(?<=[.!?])\s+', tale.contents.strip())
+    pages = []
+    for i in range(0, len(sentences), 2):
+        pair = ' '.join(sentences[i:i+2]).strip()
+        if pair:
+            pages.append(pair)
+    
+    if req.page < 1 or req.page > len(pages):
+        raise HTTPException(status_code=400, detail="페이지 번호가 잘못되었습니다.")
+
+    text = sentences[req.page - 1]
+
+    try:
+        with open(cached_path, "wb") as f:
+            for chunk in sg.tts_generator(db=db, text=text, voice_id=voice_id):
+                f.write(chunk)
+        print(f"[DEBUG] ✅ 새 음성 생성 완료 → {cached_path}")
+    except Exception as e:
+        print(f"[ERROR] ⚠️ 새 음성 생성 실패: {e}")
+        raise HTTPException(status_code=500, detail="TTS 생성 실패")
+
+    def iterfile():
+        with open(cached_path, "rb") as f:
+            yield from f
+    return StreamingResponse(iterfile(), media_type="audio/wav")
 
 @app.post("/users/{uid}/fairy_tales/{fid}/progress", response_model=UpdateReadingProgressResponse)
 def update_reading_progress(uid: int, fid: int, req: UpdateReadingProgressRequest = Body(...), db: Session = Depends(get_db)):
