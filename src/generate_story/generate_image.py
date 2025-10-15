@@ -5,7 +5,7 @@ import torch
 import os
 
 class ImageGenerator:
-    def __init__(self, fid, pre_trained_model_name="Bingsu/my-korean-stable-diffusion-v1-5"):
+    def __init__(self, pre_trained_model_name="Bingsu/my-korean-stable-diffusion-v1-5"):
         dotenv_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
         load_dotenv(dotenv_path)
         
@@ -41,7 +41,7 @@ class ImageGenerator:
             self.pipeline = None
 
 
-    def generate_image(self, prompt, title):
+    def generate_image(self, fid, prompt, title):
         os.makedirs(os.path.join(self.save_path, title), exist_ok=True)
 
         if self.pipeline is None:
@@ -59,7 +59,7 @@ class ImageGenerator:
             count = len(os.listdir(os.path.join(self.save_path, title))) + 1
 
             image_path = os.path.join(self.save_path, title)
-            file_name = f"{self.fid}_{title}_{str(count).zfill(6)}.png"
+            file_name = f"{fid}_{title}_{str(count).zfill(6)}.png"
 
             pipeline_output.images[0].save(os.path.join(image_path, file_name))
 

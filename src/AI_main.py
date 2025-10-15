@@ -127,7 +127,7 @@ def generate_story(req: GenerateStoryRequest, db: Session = Depends(get_db), str
             def generate_pages():
                 for i, page_content in enumerate(result["content"]):
                     page_summary = summarizer.generate_page_summaries([page_content])[0]
-                    image_path, file_name = img_generator.generate_image(page_summary, result["title"])
+                    image_path, file_name = img_generator.generate_image(story.fid, page_summary, result["title"])
                     
                     # 이미지 DB 저장
                     images = FairyTaleImages(fid=story.fid, image_path=image_path, file_name=file_name, createDate=date.today())
