@@ -116,7 +116,7 @@ async def pre_generate_fairy_tale_audio(uid: int, voice_id: str):
                 try:
                     print(f"[DEBUG] {tale.title} page {i+1} 생성 중...")
                     async with aiofiles.open(page_path, "wb") as f:
-                        async for chunk in sg.tts_generator(voice_id=voice_id, text=text):
+                        async for chunk in sg.tts_generator(db=db, text=text, voice_id=voice_id):
                             await f.write(chunk)
                     print(f"[DEBUG] 생성 완료 → {page_path}")
                 except Exception as e:
