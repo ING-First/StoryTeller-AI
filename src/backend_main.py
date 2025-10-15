@@ -79,7 +79,7 @@ def get_current_user(
     return user
 
 async def pre_generate_fairy_tale_audio(uid: int, voice_id: str):
-    """사용자의 모든 동화에 대해 페이지별 TTS 음성을 비동기 생성"""
+    """사용자의 모든 동화에 대해 2페이지씩 묶어 음성 파일을 미리 생성"""
     db = SessionLocal()
     try:
         tales = db.query(FairyTale).filter(or_(FairyTale.uid == 0, FairyTale.uid == uid)).all()
@@ -87,58 +87,45 @@ async def pre_generate_fairy_tale_audio(uid: int, voice_id: str):
             print(f"[INFO] uid={uid} 사용자의 동화 데이터가 없습니다.")
             return
 
-        tts_root = os.path.join(GENERATED_PATH, str(uid))
+        tts_root = os.path.join(BASE_DIR, "generated_voices", str(uid))
         os.makedirs(tts_root, exist_ok=True)
-
-        print(f"[DEBUG] {len(tales)}개의 동화에 대해 음성 파일을 미리 생성합니다...")
+        print(f"[DEBUG] {len(tales)}개의 동화에 대해 음성 파일을 미리 생성합니다... (root={tts_root})")
 
         for tale in tales:
             tale_dir = os.path.join(tts_root, str(tale.fid))
             os.makedirs(tale_dir, exist_ok=True)
 
-            # 페이지 단위로 텍스트 분리            
+            # 문장 단위 분리
             sentences = re.split(r'(?<=[.!?])\s+', tale.contents.strip())
-            pages = []
-            for i in range(0, len(sentences), 2):
-                pair = ' '.join(sentences[i:i+2]).strip()
-                if pair:
-                    pages.append(pair)
+            pages = [' '.join(sentences[i:i+2]).strip() for i in range(0, len(sentences), 2) if ' '.join(sentences[i:i+2]).strip()]
 
-            for i, text in enumerate(pages):
-                if not text.strip():
-                    continue
+            # 2페이지(4문장)씩 묶기
+            double_pages = []
+            for i in range(0, len(pages), 2):
+                merged_text = ' '.join(pages[i:i+2]).strip()
+                if merged_text:
+                    start_page = i + 1
+                    end_page = min(i + 2, len(pages))
+                    filename = f"page_{start_page}_{end_page}.wav"
+                    double_pages.append((filename, merged_text))
 
-                page_path = os.path.join(tale_dir, f"page_{i + 1}.wav")
+            for filename, text in double_pages:
+                page_path = os.path.join(tale_dir, filename)
                 if os.path.exists(page_path):
-                    print(f"[SKIP] {tale.title} page {i+1} → 이미 존재함")
+                    print(f"[SKIP] {tale.title} {filename} → 이미 존재함")
                     continue
 
                 try:
-                    print(f"[DEBUG] {tale.title} page {i+1} 생성 중...")
+                    print(f"[DEBUG] {tale.title} {filename} 생성 중...")
                     async with aiofiles.open(page_path, "wb") as f:
                         async for chunk in sg.tts_generator(db=db, text=text, voice_id=voice_id):
                             await f.write(chunk)
                     print(f"[DEBUG] 생성 완료 → {page_path}")
                 except Exception as e:
-                    print(f"[ERROR] TTS 실패 (fid={tale.fid}, page={i + 1}) - {e}")
+                    print(f"[ERROR] TTS 실패 ({filename}) - {e}")
                     continue
 
-                page_path = os.path.join(tale_dir, f"page_{i + 1}.wav")
-                if os.path.exists(page_path):
-                    print(f"[SKIP] {tale.title} page {i+1} → 이미 존재함")
-                    continue
-
-                try:
-                    print(f"[DEBUG] 🔊 {tale.title} page {i+1} 생성 중...")
-                    async with aiofiles.open(page_path, "wb") as f:
-                        async for chunk in sg.tts_generator(voice_id=voice_id, text=text):
-                            await f.write(chunk)
-                    print(f"[DEBUG] 생성 완료 → {page_path}")
-                except Exception as e:
-                    print(f"[ERROR] ❌ TTS 실패 (fid={tale.fid}, page={i + 1}) - {e}")
-                    continue
-
-        print(f"[INFO] ✅ uid={uid}의 모든 동화 음성 사전 생성 완료")
+        print(f"[INFO] ✅ uid={uid}의 모든 동화 2페이지 단위 음성 생성 완료")
     except Exception as e:
         print(f"[ERROR] pre_generate_fairy_tale_audio 예외 발생: {e}")
     finally:
@@ -458,61 +445,49 @@ def resume_reading(uid: int, fid: int, db: Session = Depends(get_db)):
     return ResumeResponse(**result)
 
 @app.post("/users/{uid}/fairy_tales/{fid}/read")
-def read_page(
-    uid: int,
-    fid: int,
-    req: ReadRequest = Body(...),
-    db: Session = Depends(get_db)
-):
-    # 사용자 음성 조회
-    v = (
-        db.query(Voices)
-        .filter(Voices.uid == uid)
-        .order_by(Voices.vid.desc())
-        .first()
-    )
+def read_page(uid: int, fid: int, req: ReadRequest = Body(...), db: Session = Depends(get_db)):
+    v = db.query(Voices).filter(Voices.uid == uid).order_by(Voices.vid.desc()).first()
     voice_id = req.voice_id or getattr(v, "voice_id", None)
     if not voice_id:
         raise HTTPException(status_code=400, detail="등록된 음성이 없습니다.")
 
-    # 캐싱된 파일 경로
-    base_dir = os.path.join("generated_voices", str(uid), str(fid))
+    base_dir = os.path.join(BASE_DIR, "generated_voices", str(uid), str(fid))
     os.makedirs(base_dir, exist_ok=True)
-    cached_path = os.path.join(base_dir, f"page_{req.page}.wav")
 
-    # 캐시된 파일이 존재하면 그대로 반환
+    # ✅ 요청된 page 번호를 포함하는 묶음 계산
+    start_page = req.page if req.page % 2 != 0 else req.page - 1
+    end_page = start_page + 1
+    filename = f"page_{start_page}_{end_page}.wav"
+    cached_path = os.path.join(base_dir, filename)
+
+    print(f"[DEBUG] 캐시 파일 검사: {cached_path}")
+
     if os.path.exists(cached_path) and os.path.getsize(cached_path) > 0:
-        print(f"[DEBUG] 🎵 캐싱된 파일 재생: {cached_path}")
+        print(f"[DEBUG] 🎵 캐싱된 묶음 재생: {cached_path}")
         def iterfile():
             with open(cached_path, "rb") as f:
                 yield from f
         return StreamingResponse(iterfile(), media_type="audio/wav")
 
-    # 캐시 파일이 없으면 새로 생성
     print(f"[DEBUG] 캐싱된 파일 없음 → 새로 생성 중...")
-    # 페이지 텍스트 불러오기
+
     tale = db.query(FairyTale).filter(FairyTale.fid == fid).first()
     if not tale:
         raise HTTPException(status_code=404, detail="해당 동화를 찾을 수 없습니다.")
 
-    # 페이지별 텍스트 분리
     sentences = re.split(r'(?<=[.!?])\s+', tale.contents.strip())
-    pages = []
-    for i in range(0, len(sentences), 2):
-        pair = ' '.join(sentences[i:i+2]).strip()
-        if pair:
-            pages.append(pair)
-    
-    if req.page < 1 or req.page > len(pages):
-        raise HTTPException(status_code=400, detail="페이지 번호가 잘못되었습니다.")
+    pages = [' '.join(sentences[i:i+2]).strip() for i in range(0, len(sentences), 2) if ' '.join(sentences[i:i+2]).strip()]
 
-    text = pages[req.page - 1]
+    # 묶음 텍스트 구성
+    merged_text = ' '.join(pages[start_page - 1:end_page]).strip()
+    if not merged_text:
+        raise HTTPException(status_code=400, detail="해당 페이지 내용이 비어있습니다.")
 
     try:
         with open(cached_path, "wb") as f:
-            for chunk in sg.tts_generator(db=db, text=text, voice_id=voice_id):
+            for chunk in sg.tts_generator(db=db, text=merged_text, voice_id=voice_id):
                 f.write(chunk)
-        print(f"[DEBUG] 새 음성 생성 완료 → {cached_path}")
+        print(f"[DEBUG] 새 묶음 생성 완료 → {cached_path}")
     except Exception as e:
         print(f"[ERROR] 새 음성 생성 실패: {e}")
         raise HTTPException(status_code=500, detail="TTS 생성 실패")
