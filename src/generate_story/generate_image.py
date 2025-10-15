@@ -13,7 +13,6 @@ class ImageGenerator:
         self.dtype = torch.float16 if self.device == "cuda" else torch.float32
         self.pre_trained_model_name = pre_trained_model_name
         self.lora_scale = 0.9
-        self.fid = fid
 
         BASE_DIR = Path(__file__).resolve().parent.parent
         self.lora_path = BASE_DIR.parent / "models" / "lora-diffusion-weight"
