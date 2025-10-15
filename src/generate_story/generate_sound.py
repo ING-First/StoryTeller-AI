@@ -9,9 +9,7 @@ from db.db_models import Voices
 class SoundGenerator:
     def __init__(self, device: str = "cuda"):
         self.device = device
-        print("[DEBUG] Zonos 모델 로드 중...")
         self.model = Zonos.from_pretrained("Zyphra/Zonos-v0.1-transformer", device=device)
-        print("[DEBUG] Zonos 모델 로드 완료")
 
     def _ensure_wav_pcm16_mono_22050(self, wav, sr):
         if wav.ndim > 1:

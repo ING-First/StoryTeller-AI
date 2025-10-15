@@ -86,15 +86,15 @@ async def generate_page_audio(db, tale, uid, voice_id, page_path, text):
             print(f"[SKIP] {os.path.basename(page_path)} → 이미 존재함")
             return
 
-        print(f"[DEBUG] 🎧 {tale.title} 생성 중 → {os.path.basename(page_path)}")
+        print(f"{tale.title} 생성 중 → {os.path.basename(page_path)}")
         # 동기형 TTS 호출 (모델이 async generator가 아니기 때문)
         with open(page_path, "wb") as f:
             for chunk in sg.tts_generator(db=db, text=text, voice_id=voice_id):
                 f.write(chunk)
 
-        print(f"[DEBUG] ✅ 저장 완료 → {page_path}")
+        print(f"저장 완료 → {page_path}")
     except Exception as e:
-        print(f"[ERROR] ❌ {tale.title} {os.path.basename(page_path)} 생성 실패 - {e}")
+        print(f"[ERROR] {tale.title} {os.path.basename(page_path)} 생성 실패 - {e}")
 
 async def generate_tale_audio(db, tale, uid, voice_id):
     """단일 동화의 모든 페이지(2페이지씩 묶음) 음성 생성"""
@@ -132,7 +132,7 @@ async def generate_tale_audio(db, tale, uid, voice_id):
         print(f"[WARN] {tale.title} → 생성할 페이지가 없습니다.")
 
 async def pre_generate_fairy_tale_audio(uid: int, voice_id: str):
-    """사용자의 모든 동화에 대해 병렬로 음성 생성"""
+    """사용자의 모든 동화에 대해 음성 생성"""
     db = SessionLocal()
     try:
         tales = db.query(FairyTale).filter(
@@ -142,14 +142,14 @@ async def pre_generate_fairy_tale_audio(uid: int, voice_id: str):
             print(f"[INFO] uid={uid} 사용자의 동화 데이터가 없습니다.")
             return
 
-        print(f"[DEBUG] {len(tales)}개의 동화 병렬 음성 생성 시작...")
+        print(f"[DEBUG] {len(tales)}개의 동화 음성 생성 시작...")
 
         # 모든 동화 동시 실행
         await asyncio.gather(
             *[generate_tale_audio(db, tale, uid, voice_id) for tale in tales]
         )
 
-        print(f"[INFO] ✅ uid={uid}의 모든 동화 음성 병렬 생성 완료")
+        print(f"[INFO] uid={uid}의 모든 동화 음성 생성 완료")
     except Exception as e:
         print(f"[ERROR] pre_generate_fairy_tale_audio 예외 발생: {e}")
     finally:
@@ -482,7 +482,7 @@ def read_page(
     if not voice_id:
         raise HTTPException(status_code=400, detail="등록된 음성이 없습니다.")
 
-    # ✅ 절대경로 기준으로 통일
+    # 절대경로 기준으로 통일
     base_dir = os.path.join(BASE_DIR, "generated_voices", str(uid), str(fid))
     os.makedirs(base_dir, exist_ok=True)
 
@@ -492,18 +492,18 @@ def read_page(
     filename = f"page_{start_page}_{end_page}.wav"
     cached_path = os.path.join(base_dir, filename)
 
-    print(f"[DEBUG] 캐시 파일 검사: {cached_path}")
+    print(f"[DEBUG] 파일 검사: {cached_path}")
 
     # 캐시된 파일이 있으면 그대로 반환
     if os.path.exists(cached_path) and os.path.getsize(cached_path) > 0:
-        print(f"[DEBUG] 🎵 캐싱된 파일 재생: {cached_path}")
+        print(f"[DEBUG] 파일 재생: {cached_path}")
         def iterfile():
             with open(cached_path, "rb") as f:
                 yield from f
         return StreamingResponse(iterfile(), media_type="audio/wav")
 
     # 캐시가 없으면 새로 생성
-    print(f"[DEBUG] 캐싱된 파일 없음 → 새로 생성 중...")
+    print(f"[DEBUG] 파일 없음 → 새로 생성 중...")
     tale = db.query(FairyTale).filter(FairyTale.fid == fid).first()
     if not tale:
         raise HTTPException(status_code=404, detail="해당 동화를 찾을 수 없습니다.")
@@ -517,13 +517,13 @@ def read_page(
         raise HTTPException(status_code=400, detail="페이지 내용이 비어있습니다.")
 
     try:
-        print(f"[DEBUG] 🔊 새 묶음 생성 중... ({filename})")
+        print(f"[DEBUG] 새 묶음 생성 중... ({filename})")
         with open(cached_path, "wb") as f:
             for chunk in sg.tts_generator(db=db, text=merged_text, voice_id=voice_id):
                 f.write(chunk)
-        print(f"[DEBUG] ✅ 새 묶음 생성 완료 → {cached_path}")
+        print(f"[DEBUG] 새 묶음 생성 완료 → {cached_path}")
     except Exception as e:
-        print(f"[ERROR] ❌ 새 음성 생성 실패: {e}")
+        print(f"[ERROR] 새 음성 생성 실패: {e}")
         raise HTTPException(status_code=500, detail="TTS 생성 실패")
 
     # 재생 스트림 반환
