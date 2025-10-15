@@ -289,24 +289,39 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 VOICE_PATH = os.path.join(BASE_DIR, "ref_voices")
 
 @app.post("/voices/register")
-async def register_voice(uid: int = Form(...), audio: UploadFile = File(...), db: Session = Depends(get_db)):
+async def register_voice(
+    uid: int = Form(...),
+    audio: UploadFile = File(...),
+    db: Session = Depends(get_db)
+):
+    """
+    사용자 음성 등록 API
+    - 브라우저별 업로드 포맷(webm/mp4/ogg/m4a)을 모두 지원
+    - ffmpeg 변환 후 wav 파일을 저장 및 DB 등록
+    """
     try:
         os.makedirs(VOICE_PATH, exist_ok=True)
 
-        # 업로드된 MIME 타입 로깅
+        # MIME 타입 감지
         ct = (audio.content_type or "").lower()
         print(f"[DEBUG] 업로드된 content_type = {ct}")
 
         # 확장자 자동 결정
-        ext = ".webm"
-        if "mp4" in ct or "m4a" in ct:
-            ext = ".m4a"
+        if "webm" in ct or "opus" in ct:
+            ext = ".webm"
+        elif "mp4" in ct or "m4a" in ct or "aac" in ct:
+            ext = ".mp4"
+        elif "ogg" in ct or "vorbis" in ct:
+            ext = ".ogg"
+        else:
+            ext = ".wav"  # 예외 케이스 기본값
 
+        # 저장 파일명 생성
         file_id = uuid.uuid4().hex[:8]
         base_filename = f"user_{uid}_{file_id}"
         temp_save_path = os.path.join(VOICE_PATH, f"{base_filename}{ext}")
 
-        # 청크 단위 저장 
+        # 업로드 파일 저장
         with open(temp_save_path, "wb") as f:
             while True:
                 chunk = await audio.read(1024 * 1024)
@@ -315,27 +330,43 @@ async def register_voice(uid: int = Form(...), audio: UploadFile = File(...), db
                 f.write(chunk)
         print(f"[DEBUG] 업로드 파일 저장 완료 → {temp_save_path}")
 
+        # 변환 대상 확인
         wav_path = os.path.join(VOICE_PATH, f"{base_filename}.wav")
 
-        # ffprobe로 파일 상태 검사
-        try:
-            subprocess.run([
-                "ffmpeg", "-y",
-                "-i", temp_save_path,
-                "-ar", "22050", "-ac", "1", "-c:a", "pcm_s16le", wav_path
-            ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
-            print(f"[DEBUG] 변환 성공 → {wav_path}")
-        except subprocess.CalledProcessError as e:
-            print(f"[ERROR] ffmpeg 변환 실패: {e}")
-            raise HTTPException(status_code=500, detail="음성 변환 중 오류 발생")
+        file_check = subprocess.run(["file", "-b", temp_save_path], capture_output=True, text=True)
+        file_type = file_check.stdout.lower()
+        print(f"[DEBUG] ffprobe file_type: {file_type}")
 
-        # DB 저장
+        # ffmpeg 변환 수행
+        if any(x in file_type for x in ["webm", "opus", "mp4", "m4a", "aac", "ogg", "vorbis"]):
+            try:
+                subprocess.run([
+                    "ffmpeg", "-y",
+                    "-i", temp_save_path,
+                    "-ar", "22050",
+                    "-ac", "1",
+                    "-c:a", "pcm_s16le",
+                    wav_path
+                ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
+                print(f"[DEBUG] ffmpeg 변환 성공 → {wav_path}")
+            except subprocess.CalledProcessError as e:
+                print(f"[ERROR] ffmpeg 변환 실패: {e}")
+                raise HTTPException(status_code=500, detail="음성 변환 중 오류 발생")
+        else:
+            print(f"[DEBUG] WAV 형식으로 업로드되어 변환 생략 → {temp_save_path}")
+            wav_path = temp_save_path
+
+        # WAV 파일 존재 여부 확인
+        if not os.path.exists(wav_path) or os.path.getsize(wav_path) == 0:
+            raise HTTPException(status_code=500, detail="WAV 파일이 비어있거나 존재하지 않습니다.")
+
+        # DB 등록
         voice_id = f"voice_{uid}_{uuid.uuid4().hex[:8]}"
         voice_record = Voices(
             uid=uid,
             voice_id=voice_id,
             memo="",
-            voiceFile=wav_path,    
+            voiceFile=os.path.relpath(wav_path, BASE_DIR), 
             createDate=date.today()
         )
         db.add(voice_record)
@@ -344,7 +375,7 @@ async def register_voice(uid: int = Form(...), audio: UploadFile = File(...), db
 
         print(f"[DEBUG] DB 저장 완료 → voice_id={voice_id}")
         return {"message": "사용자 음성 등록 성공", "voice_id": voice_id}
-    
+
     except Exception as e:
         db.rollback()
         print(f"[ERROR] register_voice 내부 예외 발생: {e}")
