@@ -96,10 +96,31 @@ async def pre_generate_fairy_tale_audio(uid: int, voice_id: str):
             tale_dir = os.path.join(tts_root, str(tale.fid))
             os.makedirs(tale_dir, exist_ok=True)
 
-            # 페이지 단위로 텍스트 분리
+            # 페이지 단위로 텍스트 분리            
             sentences = re.split(r'(?<=[.!?])\s+', tale.contents.strip())
-            for i, text in enumerate(sentences):
+            pages = []
+            for i in range(0, len(sentences), 2):
+                pair = ' '.join(sentences[i:i+2]).strip()
+                if pair:
+                    pages.append(pair)
+
+            for i, text in enumerate(pages):
                 if not text.strip():
+                    continue
+
+                page_path = os.path.join(tale_dir, f"page_{i + 1}.wav")
+                if os.path.exists(page_path):
+                    print(f"[SKIP] {tale.title} page {i+1} → 이미 존재함")
+                    continue
+
+                try:
+                    print(f"[DEBUG] {tale.title} page {i+1} 생성 중...")
+                    async with aiofiles.open(page_path, "wb") as f:
+                        async for chunk in sg.tts_generator(voice_id=voice_id, text=text):
+                            await f.write(chunk)
+                    print(f"[DEBUG] 생성 완료 → {page_path}")
+                except Exception as e:
+                    print(f"[ERROR] TTS 실패 (fid={tale.fid}, page={i + 1}) - {e}")
                     continue
 
                 page_path = os.path.join(tale_dir, f"page_{i + 1}.wav")
@@ -112,7 +133,7 @@ async def pre_generate_fairy_tale_audio(uid: int, voice_id: str):
                     async with aiofiles.open(page_path, "wb") as f:
                         async for chunk in sg.tts_generator(voice_id=voice_id, text=text):
                             await f.write(chunk)
-                    print(f"[DEBUG] ✅ 생성 완료 → {page_path}")
+                    print(f"[DEBUG] 생성 완료 → {page_path}")
                 except Exception as e:
                     print(f"[ERROR] ❌ TTS 실패 (fid={tale.fid}, page={i + 1}) - {e}")
                     continue
