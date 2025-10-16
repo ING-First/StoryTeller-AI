@@ -28,15 +28,15 @@ class SoundGenerator:
                 raise FileNotFoundError(f"[ERROR] DB에 voice_id={voice_id} 해당 음성이 없습니다.")
 
             print(f"[DEBUG] DB 조회 결과: {voice_record.voiceFile}")
-            base_dir = os.path.dirname(os.path.abspath(__file__))
-            ref_wav_path = os.path.normpath(os.path.join(base_dir, "..", voice_record.voiceFile))
+            base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # /app
+            ref_wav_path = os.path.normpath(os.path.join(base_dir, voice_record.voiceFile))
 
             if not os.path.exists(ref_wav_path):
                 raise FileNotFoundError(f"[ERROR] 원본 파일 없음: {ref_wav_path}")
 
             # 🔹 DB 경로 기반으로 ref_audio 저장 경로 자동 생성
             ref_audio_relpath = voice_record.voiceFile.replace("ref_voices", "ref_audio").replace(".webm", "_converted.wav")
-            ref_audio_path = os.path.normpath(os.path.join(base_dir, "..", ref_audio_relpath))
+            ref_audio_path = os.path.normpath(os.path.join(base_dir, ref_audio_relpath))
             os.makedirs(os.path.dirname(ref_audio_path), exist_ok=True)
 
             print(f"[DEBUG] 변환 후 저장 경로: {ref_audio_path}")
