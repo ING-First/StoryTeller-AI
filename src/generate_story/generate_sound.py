@@ -28,7 +28,7 @@ class SoundGenerator:
                 raise FileNotFoundError(f"[ERROR] DB에 voice_id={voice_id} 해당 음성이 없습니다.")
 
             print(f"[DEBUG] DB 조회 결과: {voice_record.voiceFile}")
-            base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # /app
+            base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # /app
             ref_wav_path = os.path.normpath(os.path.join(base_dir, voice_record.voiceFile))
 
             if not os.path.exists(ref_wav_path):
