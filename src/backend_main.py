@@ -44,7 +44,6 @@ security = HTTPBearer()
 SECRET_KEY = os.getenv("SECRET_KEY")
 ALGORITHM = os.getenv("ALGORITHM")
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES"))
-VOICE_PATH = os.getenv("VOICE_PATH")
 
 pattern = re.compile(r'^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*()_\-+=\[\]{}\\|;:\'",.<>/?`~])[A-Za-z\d!@#$%^&*()_\-+=\[\]{}\\|;:\'",.<>/?`~]{8,15}$')
 
@@ -364,7 +363,7 @@ def login(req: LoginRequest, db: Session = Depends(get_db)):
         access_token=access_token, 
         token_type="bearer")
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))  
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 VOICE_PATH = os.path.join(BASE_DIR, "ref_voices")
 GENERATED_PATH = os.path.join(BASE_DIR, "generated_voices")
 
