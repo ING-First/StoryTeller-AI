@@ -9,6 +9,7 @@ from datetime import date
 import time
 import logging
 import os
+import sys
 os.environ['CUDA_VISIBLE_DEVICES'] = '0'  # GPU 0 사용
 
 import torch
@@ -74,7 +75,7 @@ class BasicStoryGenerator:
             logger.error(f"동화 검색 실패: {e}")
             return []
 
-    def generate_images_for_story(self, story: FairyTale):
+    def generate_images_for_story(self, story: FairyTale, force_regenerate=False):
         """특정 동화에 대한 이미지 생성"""
         try:
             logger.info(f"동화 '{story.title}' (fid={story.fid}) 이미지 생성 시작")
@@ -82,11 +83,20 @@ class BasicStoryGenerator:
             # 이미 이미지가 있는지 확인
             existing_images = self.db.query(FairyTaleImages).filter(
                 FairyTaleImages.fid == story.fid
-            ).count()
+            ).all()
             
-            if existing_images > 0:
-                logger.info(f"동화 {story.fid}는 이미 {existing_images}개의 이미지가 있습니다. 스킵합니다.")
-                return
+            if existing_images:
+                if force_regenerate:
+                    logger.info(f"동화 {story.fid}의 기존 DB 레코드 {len(existing_images)}개 삭제 중...")
+                    # DB에서만 삭제
+                    for img in existing_images:
+                        self.db.delete(img)
+                    
+                    self.db.commit()
+                    logger.info("기존 DB 레코드 삭제 완료")
+                else:
+                    logger.info(f"동화 {story.fid}는 이미 {len(existing_images)}개의 이미지가 있습니다. 스킵합니다.")
+                    return
             
             # contents 처리: 2문장씩 분할
             logger.info("본문을 2문장씩 분할 중...")
@@ -148,11 +158,13 @@ class BasicStoryGenerator:
             logger.error(f"동화 {story.fid} 이미지 생성 중 오류: {e}")
             self.db.rollback()
 
-    def main(self):
+    def main(self, force_regenerate=False):
         """메인 실행 함수"""
         try:
             logger.info("=" * 50)
             logger.info("기본 동화 이미지 생성 프로세스 시작")
+            if force_regenerate:
+                logger.info("*** 강제 재생성 모드 ***")
             logger.info("=" * 50)
             
             # 모델 로드
@@ -168,7 +180,7 @@ class BasicStoryGenerator:
             # 각 동화에 대해 이미지 생성
             for idx, story in enumerate(stories, 1):
                 logger.info(f"\n[{idx}/{len(stories)}] 동화 처리 중...")
-                self.generate_images_for_story(story)
+                self.generate_images_for_story(story, force_regenerate=force_regenerate)
             
             logger.info("=" * 50)
             logger.info("모든 기본 동화 이미지 생성 완료!")
@@ -184,9 +196,12 @@ class BasicStoryGenerator:
 
 
 if __name__ == "__main__":
+    # 커맨드라인 인자로 --force 또는 -f 받기
+    force_regenerate = '--force' in sys.argv or '-f' in sys.argv
+    
     try:
         basic_story_generator = BasicStoryGenerator()
-        basic_story_generator.main()
+        basic_story_generator.main(force_regenerate=force_regenerate)
     except KeyboardInterrupt:
         logger.info("\n사용자에 의해 중단되었습니다.")
     except Exception as e:
