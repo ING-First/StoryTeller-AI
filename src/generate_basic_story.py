@@ -130,8 +130,12 @@ class BasicStoryGenerator:
             logger.info(f"총 {len(page_summaries)}개 이미지 생성 중...")
             for idx, summary in enumerate(tqdm(page_summaries, desc=f"'{story.title}' 이미지 생성")):
                 try:
-                    # 이미지 생성
-                    image_path, file_name = self.img_generator.generate_image(summary, story.title)
+                    # 이미지 생성 - fid, prompt(summary), title 순서로 전달
+                    image_path, file_name = self.img_generator.generate_image(
+                        story.fid,
+                        summary,
+                        story.title
+                    )
                     
                     # DB에 저장
                     image_record = FairyTaleImages(
