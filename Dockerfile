@@ -13,6 +13,8 @@ RUN apt-get update && apt-get install -y \
     build-essential libssl-dev \
     ffmpeg \
     file \
+    espeak-ng \
+    libespeak-ng1 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
