@@ -7,6 +7,7 @@ from generate_story.generate_story import StoryBookGenerator
 from generate_story.generate_image import ImageGenerator
 from generate_story.generate_eval import StoryEvaluator
 from generate_story.generate_summary import Summarizer
+from generate_story.story_pipeline import StoryPipeline
 from pydantic import BaseModel
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
@@ -57,6 +58,13 @@ summarizer = Summarizer()
 img_generator = ImageGenerator()
 img_generator.load_diffusion_model()
 
+# LangGraph 파이프라인 초기화
+story_pipeline = StoryPipeline(
+    story_generator=sbg,
+    story_evaluator=story_evaluator,
+    summarizer=summarizer
+)
+
 class GenerateStoryRequest(BaseModel):
     uid: int
     type: int
@@ -82,27 +90,32 @@ class GenerateResponse(BaseModel):
     contents: str
     createDate: date
 
-# 동화 생성 API
+# 동화 생성 API (LangGraph 파이프라인 사용)
 @app.post("/generate_story")
-def generate_story(req: GenerateStoryRequest, db: Session = Depends(get_db), stream: bool = Query(False)):    
+def generate_story(req: GenerateStoryRequest, db: Session = Depends(get_db), stream: bool = Query(False)):
     try:
-        count = 1        
-        while count <= 10:
-            result = sbg.generate_story(name=req.name, age=req.age, genre=req.genre)
-            eval_scores = story_evaluator.evaluate_single_story_fast(result['content'], result['prompt'])['scores']
-            
-            if all(score > 1 for score in eval_scores):
-                break
-            
-            count += 1
+        # LangGraph 파이프라인 실행
+        pipeline_result = story_pipeline.run(
+            name=req.name,
+            age=req.age,
+            genre=req.genre,
+            uid=req.uid,
+            type=req.type
+        )
 
-        if count > 10:
+        # 파이프라인 실행 실패 시 에러 처리
+        if not pipeline_result.get("success"):
             raise HTTPException(
-            status_code=400,
-            detail="10번 시도하였으나 유효한 동화를 생성하지 못했습니다."
-        )        
-        
-        summary = summarizer.generate_summary(uid=req.uid, type=req.type, title=result['title'], contents=result["content"], max_new_tokens=200)["summary"]
+                status_code=400,
+                detail=pipeline_result.get("error", "동화 생성에 실패했습니다.")
+            )
+
+        # 파이프라인 결과 추출
+        result = {
+            'title': pipeline_result['story_title'],
+            'content': pipeline_result['story_content']
+        }
+        summary = pipeline_result['summary']
 
         ft = FairyTale(
             uid=req.uid,
