@@ -68,3 +68,9 @@ fsspec==2025.3.2
 packaging==24.2
 typing-extensions==4.13.2
 attrs==25.3.0
+
+# LangChain & LangGraph
+langchain==0.3.13
+langchain-core==0.3.28
+langchain-community==0.3.13
+langgraph==0.2.59
