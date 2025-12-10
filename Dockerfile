@@ -1,4 +1,4 @@
-# L4 GPU + CUDA 12.1 + Ubuntu 22.04
+# RTX A6000 GPU + CUDA 12.1 + Ubuntu 22.04
 FROM nvidia/cuda:12.1.1-runtime-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
