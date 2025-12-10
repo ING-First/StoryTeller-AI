@@ -1,8 +1,11 @@
 from typing import TypedDict, List, Optional, Literal, Annotated
 from typing_extensions import TypedDict
 from langgraph.graph import StateGraph, END
-from datetime import date
+from datetime import date, datetime
 import logging
+import csv
+import os
+from pathlib import Path
 
 from .generate_story import StoryBookGenerator
 from .generate_eval import StoryEvaluator
@@ -43,22 +46,26 @@ class StoryPipeline:
 
     MAX_RETRIES = 10
     MIN_SCORE_THRESHOLD = 1
+    HIGH_QUALITY_THRESHOLD = 4  # SFT 데이터 수집을 위한 고품질 점수 기준
 
     def __init__(
         self,
         story_generator: StoryBookGenerator,
         story_evaluator: StoryEvaluator,
         summarizer: Summarizer,
+        sft_log_path: str = "sft_training_data.csv"
     ):
         """
         Args:
             story_generator: 동화 생성 모델
             story_evaluator: 동화 평가 모델
             summarizer: 요약 생성 모델
+            sft_log_path: SFT 학습 데이터 CSV 로그 경로
         """
         self.story_generator = story_generator
         self.story_evaluator = story_evaluator
         self.summarizer = summarizer
+        self.sft_log_path = sft_log_path
 
         # StateGraph 구성
         self.graph = self._build_graph()
@@ -135,6 +142,11 @@ class StoryPipeline:
             state["evaluation_scores"] = eval_result["scores"]
             logger.info(f"평가 점수: {eval_result['scores']}")
 
+            # 모든 점수가 4점 이상인 경우 SFT 학습 데이터로 저장
+            if all(score >= self.HIGH_QUALITY_THRESHOLD for score in eval_result["scores"]):
+                logger.info("고품질 동화 감지 - SFT 데이터로 저장")
+                self._log_high_quality_story_to_csv(state)
+
         except Exception as e:
             logger.error(f"동화 평가 실패: {e}", exc_info=True)
             state["error"] = f"동화 평가 실패: {str(e)}"
@@ -172,6 +184,61 @@ class StoryPipeline:
         logger.error(f"파이프라인 실패: {state.get('error', 'Unknown error')}")
         state["success"] = False
         return state
+
+    def _log_high_quality_story_to_csv(self, state: StoryState) -> None:
+        """
+        고품질 동화를 CSV 파일에 로그로 저장 (SFT 학습 데이터용)
+
+        Args:
+            state: 동화 생성 파이프라인의 현재 상태
+        """
+        try:
+            # CSV 파일 존재 여부 확인
+            file_exists = os.path.isfile(self.sft_log_path)
+
+            # CSV 파일 열기 (append 모드)
+            with open(self.sft_log_path, mode='a', newline='', encoding='utf-8') as csvfile:
+                fieldnames = [
+                    'timestamp',
+                    'name',
+                    'age',
+                    'genre',
+                    'story_title',
+                    'story_content',
+                    'prompt'
+                ] + [f'score_{i+1}' for i in range(6)]
+
+                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+
+                # 파일이 새로 생성된 경우 헤더 작성
+                if not file_exists:
+                    writer.writeheader()
+                    logger.info(f"SFT 로그 파일 생성: {self.sft_log_path}")
+
+                # 동화 내용을 하나의 문자열로 결합
+                story_content_str = " ".join(state["story_content"]) if state["story_content"] else ""
+
+                # 점수를 개별 컬럼으로 분리
+                scores = state.get("evaluation_scores", [])
+                score_dict = {f'score_{i+1}': scores[i] if i < len(scores) else 0 for i in range(6)}
+
+                # 데이터 행 작성
+                row_data = {
+                    'timestamp': datetime.now().isoformat(),
+                    'name': state.get("name", ""),
+                    'age': state.get("age", 0),
+                    'genre': state.get("genre", ""),
+                    'story_title': state.get("story_title", ""),
+                    'story_content': story_content_str,
+                    'prompt': state.get("prompt", ""),
+                    **score_dict
+                }
+
+                writer.writerow(row_data)
+                logger.info(f"고품질 동화 데이터 저장 완료 (점수: {scores})")
+
+        except Exception as e:
+            logger.error(f"CSV 로그 저장 실패: {e}", exc_info=True)
 
     def _should_regenerate(self, state: StoryState) -> Literal["regenerate", "summarize", "error"]:
         """
