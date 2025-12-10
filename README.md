@@ -23,7 +23,7 @@
 ---
 
 # **시스템 구성 및 아키텍처**
-<img width="500" height="657" alt="스크린샷 2025-08-20 19 59 32" src="https://github.com/user-attachments/assets/f7f20d4b-339f-43bd-abfb-43660eb08c19" />
+<img width="600" height="500" alt="Storyteller 아키텍처 drawio" src="https://github.com/user-attachments/assets/4a9819d7-6a70-40af-a576-a54cddba2bec" />
 
 
 
