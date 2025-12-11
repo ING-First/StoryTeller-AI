@@ -30,6 +30,7 @@ class StoryState(TypedDict):
 
     # 평가 관련
     evaluation_scores: Optional[List[int]]
+    evaluation_text: Optional[str]  # 평가 이유가 포함된 전체 평가 텍스트
     retry_count: int
 
     # 최종 결과
@@ -53,7 +54,8 @@ class StoryPipeline:
         story_generator: StoryBookGenerator,
         story_evaluator: StoryEvaluator,
         summarizer: Summarizer,
-        sft_log_path: str = "sft_training_data.csv"
+        sft_log_path: str = "sft_training_data.csv",
+        all_evaluations_log_path: str = "all_evaluations.csv"
     ):
         """
         Args:
@@ -61,11 +63,13 @@ class StoryPipeline:
             story_evaluator: 동화 평가 모델
             summarizer: 요약 생성 모델
             sft_log_path: SFT 학습 데이터 CSV 로그 경로
+            all_evaluations_log_path: 모든 평가 데이터 CSV 로그 경로
         """
         self.story_generator = story_generator
         self.story_evaluator = story_evaluator
         self.summarizer = summarizer
         self.sft_log_path = sft_log_path
+        self.all_evaluations_log_path = all_evaluations_log_path
 
         # StateGraph 구성
         self.graph = self._build_graph()
@@ -140,7 +144,11 @@ class StoryPipeline:
             )
 
             state["evaluation_scores"] = eval_result["scores"]
+            state["evaluation_text"] = eval_result["evaluation"]  # 평가 이유 저장
             logger.info(f"평가 점수: {eval_result['scores']}")
+
+            # 모든 평가 데이터를 CSV에 저장 (점수에 상관없이)
+            self._log_all_evaluations_to_csv(state)
 
             # 모든 점수가 4점 이상인 경우 SFT 학습 데이터로 저장
             if all(score >= self.HIGH_QUALITY_THRESHOLD for score in eval_result["scores"]):
@@ -184,6 +192,63 @@ class StoryPipeline:
         logger.error(f"파이프라인 실패: {state.get('error', 'Unknown error')}")
         state["success"] = False
         return state
+
+    def _log_all_evaluations_to_csv(self, state: StoryState) -> None:
+        """
+        모든 평가 데이터를 CSV 파일에 저장 (Human-in-the-Loop용)
+
+        Args:
+            state: 동화 생성 파이프라인의 현재 상태
+        """
+        try:
+            # CSV 파일 존재 여부 확인
+            file_exists = os.path.isfile(self.all_evaluations_log_path)
+
+            # CSV 파일 열기 (append 모드)
+            with open(self.all_evaluations_log_path, mode='a', newline='', encoding='utf-8') as csvfile:
+                fieldnames = [
+                    'timestamp',
+                    'name',
+                    'age',
+                    'genre',
+                    'story_title',
+                    'story_content',
+                    'prompt',
+                    'evaluation_text',  # 평가 이유 포함
+                ] + [f'score_{i+1}' for i in range(6)]
+
+                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+
+                # 파일이 새로 생성된 경우 헤더 작성
+                if not file_exists:
+                    writer.writeheader()
+                    logger.info(f"평가 로그 파일 생성: {self.all_evaluations_log_path}")
+
+                # 동화 내용을 하나의 문자열로 결합
+                story_content_str = " ".join(state["story_content"]) if state["story_content"] else ""
+
+                # 점수를 개별 컬럼으로 분리
+                scores = state.get("evaluation_scores", [])
+                score_dict = {f'score_{i+1}': scores[i] if i < len(scores) else 0 for i in range(6)}
+
+                # 데이터 행 작성
+                row_data = {
+                    'timestamp': datetime.now().isoformat(),
+                    'name': state.get("name", ""),
+                    'age': state.get("age", 0),
+                    'genre': state.get("genre", ""),
+                    'story_title': state.get("story_title", ""),
+                    'story_content': story_content_str,
+                    'prompt': state.get("prompt", ""),
+                    'evaluation_text': state.get("evaluation_text", ""),
+                    **score_dict
+                }
+
+                writer.writerow(row_data)
+                logger.info(f"평가 데이터 저장 완료 (점수: {scores})")
+
+        except Exception as e:
+            logger.error(f"평가 CSV 로그 저장 실패: {e}", exc_info=True)
 
     def _log_high_quality_story_to_csv(self, state: StoryState) -> None:
         """
@@ -296,6 +361,7 @@ class StoryPipeline:
             "story_content": None,
             "prompt": None,
             "evaluation_scores": None,
+            "evaluation_text": None,
             "retry_count": 0,
             "summary": None,
             "fid": None,
@@ -335,6 +401,7 @@ class StoryPipeline:
             "story_content": None,
             "prompt": None,
             "evaluation_scores": None,
+            "evaluation_text": None,
             "retry_count": 0,
             "summary": None,
             "fid": None,
