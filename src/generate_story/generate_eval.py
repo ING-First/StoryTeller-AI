@@ -44,13 +44,13 @@ class StoryEvaluator:
     def _system_prompt() -> str:
         return (
             "당신은 동화를 평가하는 AI입니다. 다음 동화에 대해 아래 6가지 기준에 따라 "
-            "각각 1~5점으로 점수만 매겨주세요. 이유는 생략하고 점수만 출력하세요."
+            "각각 1~5점으로 점수를 매기고, 각 항목별로 그렇게 평가한 이유를 간단히 설명해주세요."
         )
 
     def make_chat_prompt(self, story_text: str, prompt: str = "") -> List[Dict[str, str]]:
         crit = self.evaluation_criteria
         crit_lines = "\n".join([f"{i+1}. {c}" for i, c in enumerate(crit)])
-        answer_fmt = "\n".join([f"{i+1}. {c}: X점" for i, c in enumerate(crit)])
+        answer_fmt = "\n".join([f"{i+1}. {c}: X점 (이유: ...)" for i, c in enumerate(crit)])
 
         return [
             {"role": "system", "content": self._system_prompt()},
@@ -72,7 +72,7 @@ class StoryEvaluator:
         prompt: str,
         parse_scores_only: bool = False,
         expected_items: int = 6,
-        max_new_tokens: int = 100,
+        max_new_tokens: int = 300,
         do_sample: bool = False,
         repetition_penalty: float = 1.1,
     ) -> Dict[str, Any]:
@@ -144,10 +144,12 @@ class StoryEvaluator:
         scores = [0] * expected
         lines = text.strip().splitlines()
         for line in lines:
-            m = re.match(r"^\s*(\d+)\.\s*[^\:：]+[:：]\s*([0-5]?)\s*점?", line)
+            # "1. 항목명: 5점 (이유: ...)" 형식에서 점수만 추출
+            # 점수 뒤에 오는 괄호나 다른 내용은 무시
+            m = re.match(r"^\s*(\d+)\.\s*[^\:：]+[:：]\s*([0-5])\s*점", line)
             if m:
                 idx = int(m.group(1)) - 1
                 val = m.group(2)
-                if val.isdigit():
+                if val.isdigit() and 0 <= idx < expected:
                     scores[idx] = int(val)
         return scores[:expected]
